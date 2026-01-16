@@ -25,6 +25,9 @@ public:
         for(int i(0); i<3; i++) {
             data.root_ang_vel_b[i] = lowstate->msg_.imu_state().gyroscope()[i];
         }
+        for(int i(0); i<3; i++) {
+            data.imu_acc[i] = lowstate->msg_.imu_state().accelerometer()[i];
+        }
         // project_gravity_body
         data.root_quat_w = Eigen::Quaternionf(
             lowstate->msg_.imu_state().quaternion()[0],

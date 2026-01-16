@@ -19,6 +19,8 @@ struct ArticulationData
     std::vector<float> joint_stiffness; // sdk order
     std::vector<float> joint_damping; // sdk order
 
+    Eigen::Vector3f imu_acc = Eigen::Vector3f::Zero();
+
     // Joint positions of all joints.
     Eigen::VectorXf joint_pos;
     
