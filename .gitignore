@@ -1,0 +1,80 @@
+# ===========================
+# 1. 编译构建目录 (Build Directories)
+# ===========================
+build/
+**/build/
+bin/
+# lib/
+# 忽略 CMake 生成的临时文件
+CMakeFiles/
+CMakeCache.txt
+CMakeScripts/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+
+# ===========================
+# 2. C++ 编译产物 (Compiled Object files)
+# ===========================
+*.o
+*.obj
+# *.so
+# *.so.*
+*.a
+*.lib
+*.dylib
+*.dll
+
+# ===========================
+# 3. 可执行文件 (Executables)
+# ===========================
+# 忽略所有无后缀的二进制文件(Linux/Mac)，但保留源文件
+# 这是一个比较激进的规则，如果误伤了脚本，可以用 ! 恢复
+# 或者你可以手动指定要忽略的可执行文件名，例如：
+go2_ctrl
+g1_ctrl
+
+# Windows 可执行文件
+*.exe
+*.out
+*.app
+
+# ===========================
+# 4. Python 相关
+# ===========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.venv
+.venv/
+env/
+
+# ===========================
+# 5. IDE 和 编辑器配置 (Editor/IDE)
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*.kdev4
+
+# ===========================
+# 6. 其他无关紧要的文件
+# ===========================
+# 日志文件
+*.log
+# 备份文件
+*~
+*.bak
+
+# ===========================
+# 7. 特殊处理 (根据你的需要调整)
+# ===========================
+# 如果你不希望上传生成的 ONNX 模型（如果它们很大），可以取消下面这行的注释：
+# *.onnx
+
+# 如果 deploy/thirdparty 下的库很大且能重新下载，也可以考虑忽略，
+# 但通常 Unitree 的项目为了方便部署会保留 thirdparty。

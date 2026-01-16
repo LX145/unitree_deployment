@@ -61,7 +61,11 @@ public:
         output_names.push_back(output_name.release());
         // printf("Output 0 : name=%s\n", output_names.back());
 
-        action.resize(output_shape[1]);
+        size_t total_output_size = 1;
+        for (const auto& dim : output_shape) {
+            if (dim > 0) total_output_size *= dim;
+        }
+        action.resize(total_output_size);
     }
 
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs)
@@ -91,7 +95,7 @@ public:
         // Copy output data
         auto floatarr = output_tensor.front().GetTensorMutableData<float>();
         std::lock_guard<std::mutex> lock(act_mtx_);
-        std::memcpy(action.data(), floatarr, output_shape[1] * sizeof(float));
+        std::memcpy(action.data(), floatarr, action.size() * sizeof(float));
         return action;
     }
 

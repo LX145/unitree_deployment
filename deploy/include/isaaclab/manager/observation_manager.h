@@ -158,7 +158,7 @@ protected:
     ManagerBasedRLEnv* env;
 
     // whether to use gym type
-    bool use_gym_history = false; // Manually set in the configuration file
+    bool use_gym_history = true; // Manually set in the configuration file
 
 private:
     std::unordered_map<std::string, std::vector<ObservationTermCfg>> group_obs_term_cfgs_;
