@@ -36,9 +36,26 @@ REGISTER_OBSERVATION(gait_state)
     // ============================================================
     // 2. 获取传感器数据
     // ============================================================
-    float acc_x = env->robot->data.imu_acc[0];
-    float acc_y = env->robot->data.imu_acc[1];
-    
+    float raw_acc_x = env->robot->data.imu_acc[0];
+    float raw_acc_y = env->robot->data.imu_acc[1];
+    // float raw_acc_z = env->robot->data.imu_acc[2]; // Z轴通常接近9.8
+
+    // 3.2 获取姿态四元数
+    auto q = env->robot->data.root_quat_w;
+
+    // 3.3 计算重力在机身坐标系下的分量
+    // 世界坐标系重力向量 (向下)
+    Eigen::Vector3f gravity_w(0.0f, 0.0f, -9.81f); 
+    // 旋转到机身坐标系: g_b = R_wb^T * g_w = q.inverse * g_w
+    Eigen::Vector3f gravity_b = q.conjugate() * gravity_w;
+
+    // 3.4 计算“纯净”的运动加速度
+    // 原理: 测量值 = 运动加速度 - 重力分量
+    // 所以: 运动加速度 = 测量值 + 重力分量
+    // 验证: 静止平放时 raw_z=+9.8, g_b_z=-9.8 -> 相加=0. 正确!
+    float real_acc_x = raw_acc_x + gravity_b.x();
+    float real_acc_y = raw_acc_y + gravity_b.y();
+
     float gyro_x = env->robot->data.root_ang_vel_b[0];
     float gyro_y = env->robot->data.root_ang_vel_b[1];
     float gyro_z = env->robot->data.root_ang_vel_b[2];
@@ -46,7 +63,7 @@ REGISTER_OBSERVATION(gait_state)
     // ============================================================
     // 3. 抗扰逻辑
     // ============================================================
-    float inst_lin_acc_norm = std::sqrt(acc_x * acc_x + acc_y * acc_y);
+    float inst_lin_acc_norm = std::sqrt(real_acc_x * real_acc_x + real_acc_y * real_acc_y);
     float inst_ang_acc_norm = std::sqrt(
         std::pow((gyro_x - last_gyro[0]) / dt, 2) +
         std::pow((gyro_y - last_gyro[1]) / dt, 2) +
@@ -58,13 +75,27 @@ REGISTER_OBSERVATION(gait_state)
     avg_lin_acc = (1.0f - alpha) * avg_lin_acc + alpha * inst_lin_acc_norm;
     avg_ang_acc = (1.0f - alpha) * avg_ang_acc + alpha * inst_ang_acc_norm;
 
+    // static int debug_cnt = 0;
+    // debug_cnt++;
+    // if (debug_cnt > 20) { // 每 20 个周期 (约 0.4s) 打印一次，防止刷屏
+    //     debug_cnt = 0;
+    //     std::cout << "\n>>> IMU DEBUG INFO <<<" << std::endl;
+    //     std::cout << "1. Raw Acc (X, Y)    : " << raw_acc_x << ", " << raw_acc_y << std::endl;
+    //     std::cout << "2. Quat (W, X, Y, Z) : " << q.w() << ", " << q.x() << ", " << q.y() << ", " << q.z() << std::endl;
+    //     std::cout << "3. Gravity Proj (X,Y): " << gravity_b.x() << ", " << gravity_b.y() << std::endl;
+    //     std::cout << "--------------------------------" << std::endl;
+    //     std::cout << "4. Real Acc (X, Y)   : " << real_acc_x << ", " << real_acc_y << " (Should be near 0)" << std::endl;
+    //     std::cout << "5. Avg Filtered Norm : " << avg_lin_acc << " (Threshold: 2.0)" << std::endl;
+    //     std::cout << "6. Is Disturbed?     : " << (is_disturbed ? "YES !!!" : "No") << std::endl;
+    // }
+
     // 唤醒判定
-    bool raw_wake_up = (avg_lin_acc > 1.5f) || (avg_ang_acc > 10.0f);
+    bool raw_wake_up = (avg_lin_acc > 2.0f) || (avg_ang_acc > 10.0f);
     if (raw_wake_up) disturb_trigger_count++;
     else disturb_trigger_count = 0;
 
-    bool real_wake_up = (disturb_trigger_count > 5);
-    bool can_sleep = (avg_lin_acc < 0.5f) && (avg_ang_acc < 5.0f);
+    bool real_wake_up = (disturb_trigger_count > 10);
+    bool can_sleep = (avg_lin_acc < 1.5) && (avg_ang_acc < 5.0f);
 
     if (real_wake_up) is_disturbed = true;
     if (can_sleep) is_disturbed = false;

@@ -28,5 +28,5 @@ FSM:
     transitions: 
       Passive: LT + B.on_pressed
       FixStand: LT + A.on_pressed
-    policy_dir: config/policy/velocity/dwaq_flat
+    policy_dir: config/policy/velocity/cts
     
