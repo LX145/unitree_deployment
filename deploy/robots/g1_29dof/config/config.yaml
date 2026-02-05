@@ -68,7 +68,7 @@ FSM:
 
     # policy_dir: config/policy/velocity
     # policy_dir: config/policy/velocity/amp_symmetry
-    policy_dir: config/policy/velocity/multi_amp
+    policy_dir: config/policy/velocity/cts_flat
     # policy_dir: ../../../logs/rsl_rl/unitree_g1_29dof_velocity
   Mimic_Dance_102:
     transitions: 
