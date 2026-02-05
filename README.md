@@ -202,51 +202,14 @@ make -j8
 sudo make install
 ```
 
-### 3. Setup Python Env (Miniconda)
+### 3. Install Project Dependencies
 ```bash
-mkdir -p ~/miniconda3
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O ~/miniconda3/miniconda.sh
-bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-rm ~/miniconda3/miniconda.sh
-~/miniconda3/bin/conda init --all
-source ~/.bashrc
-
-conda create -n unitree-rl python=3.10
-conda activate unitree-rl
-```
-
-### 4. Install Project Dependencies
-```bash
-cd ~
-git clone https://github.com/unitreerobotics/unitree_rl_lab.git
-cd unitree_rl_lab
-python -m pip install -e source/unitree_rl_lab
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev
 ```
 
-### 5. Adapt for Jetson Orin (ARM64)
-**Step A: Switch ONNX Runtime to AARCH64**
+### 4. Build & Run on PC2
 ```bash
-cd ./deploy/thirdparty
-rm -rf ./onnxruntime-linux-x64-1.22.0
-
-# Download ARM64 version
-wget https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-aarch64-1.22.0.tgz
-tar -xvzf onnxruntime-linux-aarch64-1.22.0.tgz
-rm -rf ./onnxruntime-linux-aarch64-1.22.0.tgz
-```
-
-**Step B: Modify CMakeLists.txt**
-Open `deploy/robots/g1/CMakeLists.txt` (or your specific robot folder) and update the architecture path:
-
-```cmake
-# Find the line referencing "onnxruntime-linux-x64-..." and change x64 to aarch64
-# Example:
-# set(ONNX_RUNTIME_DIR ${CMAKE_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-aarch64-1.22.0)
-```
-
-### 6. Build & Run on PC2
-```bash
+cd deploy/robots/g1_29dof
 mkdir build && cd build
 cmake ..
 make -j8
