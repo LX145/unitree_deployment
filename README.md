@@ -1,6 +1,15 @@
-# Deploy
+<div align="center">
 
-After the model training is completed, we need to perform **Sim2Sim** on the trained strategy in Mujoco to test the performance of the model. Then, we can proceed to **Sim2Real** deployment.
+[**简体中文**](./README_zh.md) | [**English**](./README.md)
+
+</div>
+
+# Overview
+
+This project is an improved version based on the official Unitree repository [unitree_rl_lab (deploy)](https://github.com/unitreerobotics/unitree_rl_lab/tree/main/deploy). Key enhancements include:
+* **Multi-Robot Support**: Full support for **G1 (29 DOF)** and **Go2**.
+* **Complete Workflow**: Covers the entire pipeline from **Sim2Sim** (validation in Mujoco) to **Sim2Real** (physical deployment).
+* **Cross-Platform Compatibility**: Supports inference on both **x86 PCs** (via Ethernet control) and the **G1 Onboard Computer (PC2, Jetson Orin)**.
 
 ## Setup
 
