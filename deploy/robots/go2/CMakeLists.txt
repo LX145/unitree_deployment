@@ -6,6 +6,21 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(Boost REQUIRED COMPONENTS program_options)
 find_package(yaml-cpp REQUIRED)
 
+# ---- RealSense2 (optional, via pkg-config) ----
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(realsense2 QUIET realsense2)
+endif()
+if(realsense2_FOUND)
+    message(STATUS "RealSense2 found: depth camera support enabled")
+    set(HAS_REALSENSE ON)
+    add_compile_definitions(HAS_REALSENSE)
+    include_directories(${realsense2_INCLUDE_DIRS})
+else()
+    message(STATUS "RealSense2 NOT found: depth camera support disabled")
+    set(HAS_REALSENSE OFF)
+endif()
+
 # ============================================================
 # 自动识别系统架构 (Auto-detect Architecture)
 # ============================================================
@@ -41,17 +56,44 @@ include_directories(
 # ============================================================
 # 链接库
 # ============================================================
-link_libraries(
-  unitree_sdk2 ddsc ddscxx rt pthread # dds
+set(COMMON_LIBS
+  unitree_sdk2 ddsc ddscxx rt pthread
   libboost_program_options.a libyaml-cpp.a fmt
-  ${ONNX_ROOT_DIR}/lib/libonnxruntime.so.1.22.0 # <--- 使用自动选择的路径
+  ${ONNX_ROOT_DIR}/lib/libonnxruntime.so.1.22.0
 )
+
+link_libraries(${COMMON_LIBS})
 
 file(GLOB_RECURSE ADD_SRC_LIST
   src/*.cpp
 )
 
-add_library(${PROJECT_NAME}_lib ${ADD_SRC_LIST})
+# shared sensor sources (only when RealSense is available)
+if(HAS_REALSENSE)
+    file(GLOB_RECURSE SENSOR_SRC_LIST
+      ${PROJECT_SOURCE_DIR}/../../src/sensors/*.cpp
+    )
+    link_libraries(${realsense2_LIBRARIES})
+endif()
+
+add_library(${PROJECT_NAME}_lib ${ADD_SRC_LIST} ${SENSOR_SRC_LIST})
 link_libraries(${PROJECT_NAME}_lib)
 
 add_executable(go2_ctrl main.cpp)
+
+# ---- OpenCV (optional, for depth camera test display) ----
+find_package(OpenCV QUIET)
+if(OpenCV_FOUND)
+    message(STATUS "OpenCV found: depth viewer enabled")
+endif()
+
+# standalone depth camera test (only when RealSense is available)
+if(HAS_REALSENSE)
+    add_executable(test_depth_camera test_depth_camera.cpp ${SENSOR_SRC_LIST})
+    target_link_libraries(test_depth_camera ${COMMON_LIBS} ${realsense2_LIBRARIES})
+    if(OpenCV_FOUND)
+        target_link_libraries(test_depth_camera ${OpenCV_LIBS})
+        target_include_directories(test_depth_camera PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_compile_definitions(test_depth_camera PRIVATE HAS_OPENCV)
+    endif()
+endif()

@@ -16,6 +16,9 @@ This project is an improved version based on the official Unitree repository [un
 ### 1. Install Dependencies
 ```bash
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
+
+# Optional: for RealSense D435i depth camera support
+sudo apt install -y librealsense2-dev
 ```
 
 ### 2. Install unitree_sdk2
@@ -89,6 +92,9 @@ Before building the deployment code on a standard PC (for Sim2Sim or Sim2Real vi
 ```bash
 sudo apt update
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
+
+# Optional: for RealSense D435i depth camera support
+sudo apt install -y librealsense2-dev
 ```
 
 ### 1.2 Install Unitree SDK2
@@ -214,6 +220,9 @@ sudo make install
 ### 3. Install Project Dependencies
 ```bash
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev
+
+# Optional: for RealSense D435i depth camera support
+sudo apt install -y librealsense2-dev
 ```
 
 ### 4. Build & Run on PC2

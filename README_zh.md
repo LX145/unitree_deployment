@@ -24,6 +24,9 @@
 ```bash
 sudo apt update
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
+
+# 可选：RealSense D435i 深度相机支持
+sudo apt install -y librealsense2-dev
 ```
 
 ### 1.2 安装 Unitree SDK2
@@ -150,6 +153,9 @@ sudo make install
 ### 3. 安装项目依赖
 ```bash
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev
+
+# 可选：RealSense D435i 深度相机支持
+sudo apt install -y librealsense2-dev
 ```
 
 ### 4. 在 PC2 上构建与运行

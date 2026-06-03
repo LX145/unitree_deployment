@@ -5,6 +5,8 @@
 
 #include <eigen3/Eigen/Dense>
 #include "unitree/dds_wrapper/common/unitree_joystick.hpp"
+#include <mutex>
+#include <vector>
 
 namespace isaaclab
 {
@@ -23,7 +25,7 @@ struct ArticulationData
 
     // Joint positions of all joints.
     Eigen::VectorXf joint_pos;
-    
+
     // Default joint positions of all joints.
     Eigen::VectorXf default_joint_pos;
 
@@ -43,6 +45,15 @@ struct ArticulationData
     unitree::common::UnitreeJoystick* joystick = nullptr;
 
     isaaclab::MotionLoader* motion_loader = nullptr;
+
+    // ---- depth camera buffer (mutex-protected) ----
+    // Preprocessed, normalized, history-stacked, flattened policy input.
+    // Written by RealSenseDepthCamera thread at ~10 Hz.
+    // Read by observation pipeline at ~50 Hz.
+    std::vector<float> depth_obs;
+    mutable std::mutex depth_mtx;
+    bool depth_valid = false;
+    double depth_timestamp = 0.0;
 };
 
 class Articulation
