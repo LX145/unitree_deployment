@@ -10,6 +10,8 @@
 #include <thread>
 #include <yaml-cpp/yaml.h>
 
+#include "sensors/depth_provider.h"
+
 namespace isaaclab {
 class Articulation;
 }
@@ -27,7 +29,7 @@ class Articulation;
  *   // ... policy runs, reads robot->data.depth_obs ...
  *   cam.stop();    // joins thread, stops pipeline
  */
-class RealSenseDepthCamera {
+class RealSenseDepthCamera : public DepthProvider {
 public:
     struct Config {
         // ---- control ----

@@ -81,6 +81,12 @@ link_libraries(${PROJECT_NAME}_lib)
 
 add_executable(go2_ctrl main.cpp)
 
+# DDS depth verifier (no RealSense needed, always builds)
+# OpenCV is required for test_depth_dds; link unconditionally
+add_executable(test_depth_dds test_depth_dds.cpp)
+target_link_libraries(test_depth_dds ${COMMON_LIBS} opencv_core opencv_imgproc opencv_highgui)
+target_include_directories(test_depth_dds PRIVATE /usr/include/opencv4)
+
 # ---- OpenCV (optional, for depth camera test display) ----
 find_package(OpenCV QUIET)
 if(OpenCV_FOUND)

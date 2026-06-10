@@ -11,6 +11,8 @@
 #include <string>
 #include <memory>
 
+class DepthProvider;  // forward declaration
+
 class State_RLBase : public FSMState
 {
 public:
@@ -32,8 +34,8 @@ private:
     char write_buffer[1024 * 1024]; // 1MB 的写缓冲区，避免频繁触发磁盘 I/O
     long long log_step_count = 0;   // 用于生成时间戳
 
-    // Depth camera (type-erased via shared_ptr<void>; only go2w populates this)
-    std::shared_ptr<void> depth_camera_handle_;
+    // Depth provider: RealSense (real) or DDS (sim), both write to env->robot->data.depth_obs
+    std::shared_ptr<DepthProvider> depth_provider_;
 };
 
 REGISTER_FSM(State_RLBase)

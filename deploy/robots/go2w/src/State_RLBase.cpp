@@ -4,6 +4,8 @@
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #ifdef HAS_REALSENSE
 #include "sensors/realsense_depth_camera.h"
+#else
+#include "sensors/dds_depth_provider.h"
 #endif
 
 State_RLBase::State_RLBase(int state_mode, std::string state_string)
@@ -18,18 +20,20 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     );
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
 
-    // ---- depth camera (monitor_only mode) ----
-#ifdef HAS_REALSENSE
+    // ---- depth camera/provider ----
     {
         auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
         if (deploy_cfg["depth_camera"] && deploy_cfg["depth_camera"]["enable"].as<bool>(false)) {
+#ifdef HAS_REALSENSE
             auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(deploy_cfg["depth_camera"]);
-            auto cam = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
-            depth_camera_handle_ = cam;
-            spdlog::info("[Depth] camera created (monitor_only={})", cam_cfg.monitor_only);
+            depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
+            spdlog::info("[Depth] RealSense provider created (monitor_only={})", cam_cfg.monitor_only);
+#else
+            depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
+            spdlog::info("[Depth] DDS provider created (topic=rt/depth_image)");
+#endif
         }
     }
-#endif
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -63,12 +67,10 @@ void State_RLBase::enter()
 
     env->robot->update();
 
-    // Start depth camera (if configured)
-#ifdef HAS_REALSENSE
-    if (depth_camera_handle_) {
-        static_cast<RealSenseDepthCamera*>(depth_camera_handle_.get())->start();
+    // Start depth provider (RealSense or DDS, depending on build)
+    if (depth_provider_) {
+        depth_provider_->start();
     }
-#endif
 
     // Start policy thread
     policy_thread_running = true;
@@ -96,12 +98,10 @@ void State_RLBase::exit()
         policy_thread.join();
     }
 
-    // Stop depth camera (if running)
-#ifdef HAS_REALSENSE
-    if (depth_camera_handle_) {
-        static_cast<RealSenseDepthCamera*>(depth_camera_handle_.get())->stop();
+    // Stop depth provider (if running)
+    if (depth_provider_) {
+        depth_provider_->stop();
     }
-#endif
 
     if (log_file) {
         fflush(log_file);
