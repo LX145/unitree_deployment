@@ -57,6 +57,7 @@ public:
         }
         action_manager->reset();
         observation_manager->reset();
+        alg->reset();  // e.g., reset GRU hidden state in SplitDepthRunner
     }
 
     void step()

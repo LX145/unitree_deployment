@@ -34,7 +34,7 @@ struct ObservationTermCfg
         for(int j = 0; j < obs.size(); ++j)
         {
             if(scale_first) {
-                if(!scale.empty()) obs[j] *= scale[j];
+                if(!scale.empty()) obs[j] *= scale[j % scale.size()];
                 if (!clip.empty()) {
                     obs[j] = std::clamp(obs[j], clip[0], clip[1]);
                 }
@@ -42,7 +42,7 @@ struct ObservationTermCfg
                 if (!clip.empty()) {
                     obs[j] = std::clamp(obs[j], clip[0], clip[1]);
                 }
-                if(!scale.empty()) obs[j] *= scale[j];
+                if(!scale.empty()) obs[j] *= scale[j % scale.size()];
             }
         }
         buff_.push_back(obs);

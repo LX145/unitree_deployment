@@ -2,11 +2,11 @@
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <filesystem>
 #ifdef HAS_REALSENSE
 #include "sensors/realsense_depth_camera.h"
-#else
-#include "sensors/dds_depth_provider.h"
 #endif
+#include "sensors/dds_depth_provider.h"  // always included for sim2sim
 
 namespace isaaclab {
 
@@ -203,22 +203,36 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
-    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+    // Auto-detect split depth ONNX vs single ONNX
+    auto onnx_dir = policy_dir / "exported";
+    auto depth_onnx = onnx_dir / "policy_depth.onnx";
+    auto actor_onnx = onnx_dir / "policy_actor.onnx";
 
-    // ---- depth camera/provider ----
+    if (std::filesystem::exists(depth_onnx) && std::filesystem::exists(actor_onnx)) {
+        env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
+            depth_onnx.string(), actor_onnx.string(), env->robot);
+    } else {
+        env->alg = std::make_unique<isaaclab::OrtRunner>(onnx_dir / "policy.onnx");
+    }
+
+    // ---- depth camera/provider (runtime selection) ----
     {
         auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
         if (deploy_cfg["depth_camera"] && deploy_cfg["depth_camera"]["enable"].as<bool>(false)) {
+            auto dc = deploy_cfg["depth_camera"];
+            std::string source = dc["source"].as<std::string>("dds");  // default: DDS (sim)
+
 #ifdef HAS_REALSENSE
-            // Real hardware: RealSense D435i via USB
-            auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(deploy_cfg["depth_camera"]);
-            depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
-            spdlog::info("[Depth] RealSense provider created (monitor_only={})", cam_cfg.monitor_only);
-#else
-            // Simulation: DDS depth subscription from MuJoCo
-            depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
-            spdlog::info("[Depth] DDS provider created (topic=rt/depth_image)");
+            if (source == "realsense") {
+                auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(dc);
+                depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
+                spdlog::info("[Depth] RealSense provider created");
+            } else
 #endif
+            {
+                depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
+                spdlog::info("[Depth] DDS provider created (topic=rt/depth_image, source={})", source);
+            }
         }
     }
 

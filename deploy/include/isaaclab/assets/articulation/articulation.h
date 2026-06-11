@@ -54,6 +54,7 @@ struct ArticulationData
     mutable std::mutex depth_mtx;
     bool depth_valid = false;
     double depth_timestamp = 0.0;
+    uint64_t depth_seq = 0;  // monotonically increasing frame counter
 };
 
 class Articulation

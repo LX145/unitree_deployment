@@ -52,6 +52,7 @@ public:
                 robot_->data.depth_obs = heightmap.data();
                 robot_->data.depth_valid = !heightmap.data().empty();
                 robot_->data.depth_timestamp = heightmap.stamp();
+                robot_->data.depth_seq++;
             });
 
         // Wait for publisher to come online (with timeout)

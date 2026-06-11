@@ -282,6 +282,7 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_obs = std::move(stacked);
                     robot_->data.depth_valid = true;
                     robot_->data.depth_timestamp = now_sec();
+                    robot_->data.depth_seq++;
                 }
 
                 processed_frame_count_++;

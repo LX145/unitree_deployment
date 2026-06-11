@@ -155,7 +155,6 @@ REGISTER_OBSERVATION(depth_image)
     std::lock_guard<std::mutex> lock(asset->data.depth_mtx);
 
     if (!asset->data.depth_valid || asset->data.depth_obs.empty()) {
-        // Depth not yet available (first frames) → return zeros
         return std::vector<float>(w * h, 0.0f);
     }
 
