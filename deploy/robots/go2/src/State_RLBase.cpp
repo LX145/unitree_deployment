@@ -100,7 +100,7 @@ REGISTER_OBSERVATION(gait_state)
     else disturb_trigger_count = 0;
 
     bool real_wake_up = (disturb_trigger_count > 10);
-    bool can_sleep = (avg_lin_acc < 1.5) && (avg_ang_acc < 5.0f);
+    bool can_sleep = (avg_lin_acc < 2.0) && (avg_ang_acc < 5.0f);
 
     if (real_wake_up) is_disturbed = true;
     if (can_sleep) is_disturbed = false;
