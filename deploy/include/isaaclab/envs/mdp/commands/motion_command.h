@@ -9,7 +9,6 @@
 #include <math.h>
 #include <eigen3/Eigen/Dense>
 #include <spdlog/spdlog.h>
-#include <nlohmann/json.hpp>
 #include "isaaclab/assets/articulation/articulation.h"
 
 namespace isaaclab
