@@ -101,4 +101,10 @@ if(HAS_REALSENSE)
         target_include_directories(test_depth_camera PRIVATE ${OpenCV_INCLUDE_DIRS})
         target_compile_definitions(test_depth_camera PRIVATE HAS_OPENCV)
     endif()
+
+    # Read-only shadow inference: LowState DDS + RealSense + depth policy.
+    # This target intentionally has no LowCmd publisher/control path.
+    add_executable(test_depth_action test_depth_action.cpp)
+    target_link_libraries(test_depth_action ${PROJECT_NAME}_lib ${COMMON_LIBS} ${realsense2_LIBRARIES})
+    target_compile_definitions(test_depth_action PRIVATE GO2_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endif()

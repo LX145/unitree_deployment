@@ -105,14 +105,12 @@ void RealSenseDepthCamera::start()
 
 void RealSenseDepthCamera::stop()
 {
-    if (!running_.load()) return;
-
     running_.store(false);
     if (thread_.joinable()) {
         thread_.join();
+        spdlog::info("[Depth] camera thread stopped (processed {} frames)",
+                     processed_frame_count_);
     }
-    spdlog::info("[Depth] camera thread stopped (processed {} frames)",
-                 processed_frame_count_);
 }
 
 // ---------------------------------------------------------------------------
