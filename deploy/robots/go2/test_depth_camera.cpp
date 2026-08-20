@@ -34,15 +34,17 @@ void on_signal(int) { g_stop = 1; }
 static void show_depth_opencv(const std::vector<float>& depth_obs,
                               int w, int h, int frame_count)
 {
-    // Build a grayscale image: near (0 m) is black, far (2 m) is white.
+    // Match the visible Isaac Sim Xbox depth UI: near (0 m) is white and
+    // far (2 m) is black. RealSense/OpenCV already uses a top-left origin,
+    // so the tensor flip required by Isaac Sim's UI is not needed here.
     cv::Mat gray(h, w, CV_32FC1);
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             float v = depth_obs[y * w + x];
-            gray.at<float>(y, x) = v + 0.5f;  // 0=near(0m), 1=far(2m)
+            gray.at<float>(y, x) = 0.5f - v;  // 1=near(0m), 0=far(2m)
         }
     }
-    // near=0.0m → black (0), far=2.0m → white (255)
+    // near=0.0m → white (255), far=2.0m → black (0)
     gray.convertTo(gray, CV_8UC1, 255.0);
 
     // 4x nearest-neighbour for visibility
@@ -55,7 +57,7 @@ static void show_depth_opencv(const std::vector<float>& depth_obs,
 
     // Overlay text (white)
     char buf[128];
-    snprintf(buf, sizeof(buf), "#%d  %dx%d  [black=near(0m) white=far(2m)]",
+    snprintf(buf, sizeof(buf), "#%d  %dx%d  [white=near(0m) black=far(2m)]",
              frame_count, w, h);
     cv::putText(display, buf, cv::Point(4, 12),
                 cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(200, 200, 200), 1);
@@ -64,7 +66,7 @@ static void show_depth_opencv(const std::vector<float>& depth_obs,
     int bar_y = big.rows - 12;
     int bar_w = big.cols;
     for (int x = 0; x < bar_w; ++x) {
-        uchar v = static_cast<uchar>(x * 255 / bar_w);  // left=near(black), right=far(white)
+        uchar v = static_cast<uchar>(255 - (x * 255 / bar_w));  // left=near(white), right=far(black)
         cv::line(display, cv::Point(x, bar_y), cv::Point(x, bar_y + 8),
                  cv::Scalar(v, v, v), 1);
     }
