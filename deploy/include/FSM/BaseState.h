@@ -18,6 +18,8 @@ public:
         FSMStringMap.insert({state, state_string});
     }
 
+    virtual bool can_enter() { return true; }
+
     virtual void enter() {}
 
     virtual void pre_run() {}

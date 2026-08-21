@@ -2,7 +2,9 @@
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <cmath>
 #include <filesystem>
+#include <stdexcept>
 #ifdef HAS_REALSENSE
 #include "sensors/realsense_depth_camera.h"
 #endif
@@ -220,21 +222,39 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
         if (deploy_cfg["depth_camera"] && deploy_cfg["depth_camera"]["enable"].as<bool>(false)) {
             auto dc = deploy_cfg["depth_camera"];
-            std::string source = dc["source"].as<std::string>("dds");  // default: DDS (sim)
-
+#if defined(__aarch64__)
 #ifdef HAS_REALSENSE
-            if (source == "realsense") {
-                auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(dc);
-                depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
-                spdlog::info("[Depth] RealSense provider created");
-            } else
+            auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(dc);
+            depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
+            spdlog::info("[Depth] aarch64 detected: using RealSense provider");
+#else
+            throw std::runtime_error(
+                "Depth policy on aarch64 requires librealsense2 support at build time");
 #endif
-            {
-                depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
-                spdlog::info("[Depth] DDS provider created (topic=rt/depth_image, source={})", source);
-            }
+#else
+            depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
+            spdlog::info("[Depth] non-aarch64 detected: using DDS provider (rt/depth_image)");
+#endif
         }
     }
+
+    // Camera acquisition failures and unreasonable raw policy actions are fatal
+    // for the current RL state. Insert these before joystick transitions so the
+    // safety transition has priority in the 1 kHz FSM loop.
+    this->registered_checks.insert(
+        this->registered_checks.begin(),
+        std::make_pair(
+            [&]()->bool{ return action_limit_exceeded_.load(); },
+            FSMStringMap.right.at("Passive")
+        )
+    );
+    this->registered_checks.insert(
+        this->registered_checks.begin(),
+        std::make_pair(
+            [&]()->bool{ return depth_provider_ && depth_provider_->has_failed(); },
+            FSMStringMap.right.at("Passive")
+        )
+    );
 
     this->registered_checks.emplace_back(
         std::make_pair(
@@ -246,8 +266,27 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     );
 }
 
+bool State_RLBase::can_enter()
+{
+    if (depth_provider_ && !depth_provider_->is_available()) {
+        spdlog::warn("[Depth] RL entry rejected: no depth camera detected; staying in FixStand");
+        return false;
+    }
+    return true;
+}
+
 void State_RLBase::run()
 {
+    // Do not apply policy targets until the first depth frame arrives, or after
+    // the provider/action safety check has failed. Hold the entry posture for
+    // this cycle; CtrlFSM will transition to Passive immediately on failure.
+    if ((depth_provider_ && !depth_provider_->is_ready()) || action_limit_exceeded_.load()) {
+        for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
+            lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = entry_joint_pos_[i];
+        }
+        return;
+    }
+
     auto action = env->action_manager->processed_actions();
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
@@ -266,6 +305,9 @@ void State_RLBase::enter()
     }
 
     env->robot->update();
+    entry_joint_pos_.assign(env->robot->data.joint_pos.data(),
+                            env->robot->data.joint_pos.data() + env->robot->data.joint_pos.size());
+    action_limit_exceeded_.store(false);
 
     // Start depth provider (RealSense or DDS, depending on build)
     if (depth_provider_) {
@@ -285,6 +327,15 @@ void State_RLBase::enter()
         while (policy_thread_running)
         {
             env->step();
+            const auto raw_action = env->action_manager->action();
+            for (float value : raw_action) {
+                if (std::abs(value) > 10.0f) {
+                    if (!action_limit_exceeded_.exchange(true)) {
+                        spdlog::error("[RL Safety] raw action magnitude exceeded 10: {}", value);
+                    }
+                    break;
+                }
+            }
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }

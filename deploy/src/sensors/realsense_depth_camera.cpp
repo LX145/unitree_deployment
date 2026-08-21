@@ -87,6 +87,17 @@ RealSenseDepthCamera::~RealSenseDepthCamera()
     stop();
 }
 
+bool RealSenseDepthCamera::is_available() const
+{
+    try {
+        rs2::context context;
+        return context.query_devices().size() > 0;
+    } catch (const rs2::error& e) {
+        spdlog::warn("[Depth] failed to enumerate RealSense devices: {}", e.what());
+        return false;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // start / stop
 // ---------------------------------------------------------------------------
@@ -97,6 +108,8 @@ void RealSenseDepthCamera::start()
         return;
     }
 
+    ready_.store(false);
+    failed_.store(false);
     running_.store(true);
     thread_ = std::thread(&RealSenseDepthCamera::capture_loop, this);
     spdlog::info("[Depth] camera thread started (update_hz={}, out={}x{}, history={})",
@@ -106,6 +119,7 @@ void RealSenseDepthCamera::start()
 void RealSenseDepthCamera::stop()
 {
     running_.store(false);
+    ready_.store(false);
     if (thread_.joinable()) {
         thread_.join();
         spdlog::info("[Depth] camera thread stopped (processed {} frames)",
@@ -201,22 +215,28 @@ void RealSenseDepthCamera::capture_loop()
 {
     spdlog::info("[Depth] capture_loop starting...");
 
-    // Wrap the entire pipeline lifetime in a block so the rs2::pipeline
-    // destructor runs and releases USB handles BEFORE the post-stop sleep.
+    // Keep the pipeline lifetime local so its USB handles are released before
+    // the capture thread exits.
     {
         // ---- start RealSense pipeline ----
-        rs2::pipeline pipe;
+        rs2::context context;
+        if (context.query_devices().size() == 0) {
+            spdlog::error("[Depth] no RealSense device detected");
+            ready_.store(false);
+            failed_.store(true);
+            running_.store(false);
+            return;
+        }
+
+        rs2::pipeline pipe(context);
         rs2::config rs_cfg;
         rs_cfg.enable_stream(RS2_STREAM_DEPTH,
                              cfg_.raw_width, cfg_.raw_height,
                              RS2_FORMAT_Z16, cfg_.raw_fps);
 
         float depth_scale = 0.001f;  // default: 1 mm
-        rs2::device dev;            // saved for hardware_reset() at shutdown
-
         try {
             rs2::pipeline_profile profile = pipe.start(rs_cfg);
-            dev = profile.get_device();
             auto depth_sensor = profile.get_device().first<rs2::depth_sensor>();
             if (depth_sensor) {
                 depth_scale = depth_sensor.get_depth_scale();
@@ -225,6 +245,8 @@ void RealSenseDepthCamera::capture_loop()
         } catch (const rs2::error& e) {
             spdlog::error("[Depth] failed to start RealSense pipeline: {}", e.what());
             spdlog::error("[Depth] check that D435i is connected via USB 3.x");
+            ready_.store(false);
+            failed_.store(true);
             running_.store(false);
             return;
         }
@@ -243,7 +265,15 @@ void RealSenseDepthCamera::capture_loop()
                 // ---- get frame ----
                 rs2::frameset frames;
                 if (!pipe.try_wait_for_frames(&frames, 1000)) {
-                    continue;
+                    spdlog::error("[Depth] no frame received for 1 second; marking camera failed");
+                    {
+                        std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
+                        robot_->data.depth_valid = false;
+                    }
+                    ready_.store(false);
+                    failed_.store(true);
+                    running_.store(false);
+                    break;
                 }
 
                 raw_frame_count_++;
@@ -282,6 +312,7 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_timestamp = now_sec();
                     robot_->data.depth_seq++;
                 }
+                ready_.store(true);
 
                 processed_frame_count_++;
                 last_depth_update_time_ = now_sec();
@@ -292,6 +323,10 @@ void RealSenseDepthCamera::capture_loop()
                     std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
                     robot_->data.depth_valid = false;
                 }
+                ready_.store(false);
+                failed_.store(true);
+                running_.store(false);
+                break;
             }
 
             // ---- periodic tasks (stats + debug save) ----
@@ -345,23 +380,12 @@ void RealSenseDepthCamera::capture_loop()
             }
         }
 
-        pipe.stop();
-        spdlog::info("[Depth] pipeline stopped.");
-
-        // Hardware reset the device so it can be reused without re-plugging.
-        // This resets the USB firmware and re-enumerates the device.
-        if (dev) {
-            spdlog::info("[Depth] performing hardware reset...");
-            try {
-                dev.hardware_reset();
-                spdlog::info("[Depth] hardware reset complete");
-            } catch (const rs2::error& e) {
-                spdlog::warn("[Depth] hardware reset failed: {}", e.what());
-            }
+        try {
+            pipe.stop();
+            spdlog::info("[Depth] pipeline stopped.");
+        } catch (const rs2::error& e) {
+            spdlog::warn("[Depth] pipeline stop failed: {}", e.what());
         }
     } // pipeline + device destroyed here → USB handles released
-
-    // Give the kernel time to re-enumerate the device after reset.
-    std::this_thread::sleep_for(std::chrono::seconds(3));
     spdlog::info("[Depth] capture_loop exited");
 }

@@ -42,6 +42,7 @@ public:
     void start()
     {
         if (running_.load()) return;
+        ready_.store(false);
 
         sub_ = std::make_shared<unitree::robot::SubscriptionBase<HeightMap_t>>(
             "rt/depth_image",
@@ -53,6 +54,7 @@ public:
                 robot_->data.depth_valid = !heightmap.data().empty();
                 robot_->data.depth_timestamp = heightmap.stamp();
                 robot_->data.depth_seq++;
+                ready_.store(robot_->data.depth_valid);
             });
 
         // Wait for publisher to come online (with timeout)
@@ -68,14 +70,19 @@ public:
     {
         if (!running_.load()) return;
         running_.store(false);
+        ready_.store(false);
         sub_.reset();
         spdlog::info("[DDSDepth] stopped");
     }
 
-    bool is_running() const { return running_.load(); }
+    bool is_running() const override { return running_.load(); }
+    bool is_available() const override { return true; }
+    bool is_ready() const override { return ready_.load(); }
+    bool has_failed() const override { return false; }
 
 private:
     std::shared_ptr<isaaclab::Articulation> robot_;
     std::shared_ptr<unitree::robot::SubscriptionBase<HeightMap_t>> sub_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> ready_{false};
 };

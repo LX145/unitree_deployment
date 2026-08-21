@@ -102,6 +102,9 @@ private:
             {
                 if(state->isState(nextStateMode))
                 {
+                    if (!state->can_enter()) {
+                        break;
+                    }
                     spdlog::info("FSM: Change state from {} to {}", currentState->getStateString(), state->getStateString());
                     currentState->exit();
                     currentState = state;

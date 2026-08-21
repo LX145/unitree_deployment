@@ -81,7 +81,10 @@ public:
     void stop();
 
     /// Returns true if the capture thread is currently running.
-    bool is_running() const { return running_.load(); }
+    bool is_running() const override { return running_.load(); }
+    bool is_available() const override;
+    bool is_ready() const override { return ready_.load(); }
+    bool has_failed() const override { return failed_.load(); }
 
 private:
     /// The background loop: capture → preprocess → write to robot->data.
@@ -102,6 +105,8 @@ private:
 
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> ready_{false};
+    std::atomic<bool> failed_{false};
 
     // ---- statistics ----
     int64_t raw_frame_count_ = 0;
