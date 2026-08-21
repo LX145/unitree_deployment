@@ -230,6 +230,20 @@ void RealSenseDepthCamera::capture_loop()
                 depth_scale = depth_sensor.get_depth_scale();
             }
             spdlog::info("[Depth] pipeline started (depth_scale={})", depth_scale);
+
+            const auto video_profile =
+                profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
+            const auto intrinsics = video_profile.get_intrinsics();
+            const float scale_x = static_cast<float>(cfg_.out_width) / intrinsics.width;
+            const float scale_y = static_cast<float>(cfg_.out_height) / intrinsics.height;
+            spdlog::info(
+                "[Depth] intrinsics raw={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}; "
+                "resized={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}",
+                intrinsics.width, intrinsics.height,
+                intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy,
+                cfg_.out_width, cfg_.out_height,
+                intrinsics.fx * scale_x, intrinsics.fy * scale_y,
+                intrinsics.ppx * scale_x, intrinsics.ppy * scale_y);
         } catch (const rs2::error& e) {
             spdlog::error("[Depth] failed to start RealSense pipeline: {}", e.what());
             spdlog::error("[Depth] check that D435i is connected via USB 3.x");
