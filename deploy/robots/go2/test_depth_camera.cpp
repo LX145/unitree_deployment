@@ -128,6 +128,7 @@ int main()
     cfg.output_min   = -0.5f;
     cfg.output_max   = 0.5f;
     cfg.replace_invalid_with_max = true;
+    cfg.log_distribution          = true;
     cfg.save_debug_image         = true;
     cfg.debug_save_interval_s    = 2.0f;
     cfg.debug_save_dir           = "/tmp/depth_debug";

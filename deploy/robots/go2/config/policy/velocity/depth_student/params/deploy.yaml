@@ -72,5 +72,5 @@ observations:
       scale: [1.0]
       clip: null
       history_length: 1
-depth_camera: {enable: true, monitor_only: false, width: 87, height: 58, min_depth: 0.0,
+depth_camera: {enable: true, monitor_only: false, log_distribution: true, width: 87, height: 58, min_depth: 0.0,
   max_depth: 2.0, output_min: -0.5, output_max: 0.5, update_hz: 10.0}

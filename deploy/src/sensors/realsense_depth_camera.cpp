@@ -9,6 +9,9 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <numeric>
+#include <sstream>
 #include <algorithm>
 #include <chrono>
 #include <deque>
@@ -61,6 +64,7 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.replace_invalid_with_max = node["replace_invalid_with_max"].as<bool>(true);
 
     // debug
+    c.log_distribution       = node["log_distribution"].as<bool>(false);
     c.save_debug_image       = node["save_debug_image"].as<bool>(false);
     c.debug_save_interval_s  = node["debug_save_interval_s"].as<float>(2.0f);
     if (node["debug_save_dir"])
@@ -148,6 +152,44 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
         }
     }
     return out;
+}
+
+static void log_depth_distribution(const std::vector<float>& depth_obs,
+                                   int w, int h, float output_max,
+                                   int64_t depth_seq)
+{
+    if (depth_obs.size() != static_cast<std::size_t>(w * h)) return;
+
+    const float saturated_threshold = output_max - 1.0e-6f;
+    const auto saturated_count = std::count_if(
+        depth_obs.begin(), depth_obs.end(),
+        [saturated_threshold](float value) { return value >= saturated_threshold; });
+    const double saturated_percent =
+        100.0 * static_cast<double>(saturated_count) / depth_obs.size();
+    const double mean = std::accumulate(depth_obs.begin(), depth_obs.end(), 0.0)
+                      / depth_obs.size();
+
+    std::ostringstream row_profile;
+    row_profile << std::fixed << std::setprecision(3) << '[';
+    for (int y = 0; y < h; y += 2) {
+        const int row_end = std::min(y + 2, h);
+        double sum = 0.0;
+        for (int row = y; row < row_end; ++row) {
+            sum += std::accumulate(
+                depth_obs.begin() + row * w,
+                depth_obs.begin() + (row + 1) * w,
+                0.0);
+        }
+        if (y != 0) row_profile << ", ";
+        row_profile << sum / (static_cast<double>(row_end - y) * w);
+    }
+    row_profile << ']';
+
+    spdlog::info(
+        "[Depth Stats][RealSense] seq={} mean={:.3f} max_saturated={}/{} ({:.1f}%) "
+        "row_pair_mean(top->bottom)={}",
+        depth_seq, mean, saturated_count, depth_obs.size(), saturated_percent,
+        row_profile.str());
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +331,15 @@ void RealSenseDepthCamera::capture_loop()
 
                 // ---- preprocess ----
                 auto frame = process_depth(raw, raw_w, raw_h, depth_scale);
+
+                const double stats_now = now_sec();
+                if (cfg_.log_distribution &&
+                    (last_distribution_log_time_ == 0.0 ||
+                     stats_now - last_distribution_log_time_ >= 1.0)) {
+                    log_depth_distribution(frame, cfg_.out_width, cfg_.out_height,
+                                           cfg_.output_max, processed_frame_count_ + 1);
+                    last_distribution_log_time_ = stats_now;
+                }
 
                 // ---- manage history ----
                 history.push_back(std::move(frame));

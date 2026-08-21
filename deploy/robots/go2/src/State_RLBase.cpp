@@ -235,8 +235,11 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
                 "Depth policy on aarch64 requires librealsense2 support at build time");
 #endif
 #else
-            depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot);
+            depth_provider_ = std::make_shared<DDSDepthProvider>(env->robot, dc);
             spdlog::info("[Depth] non-aarch64 detected: using DDS provider (rt/depth_image)");
+            // Keep the simulated depth stream warm so its input statistics are
+            // available while the robot is held in FixStand.
+            depth_provider_->start();
 #endif
         }
     }
@@ -369,8 +372,6 @@ void State_RLBase::exit()
         if (depth_provider_->has_failed()) {
             depth_provider_->stop();
         }
-#else
-        depth_provider_->stop();
 #endif
     }
 

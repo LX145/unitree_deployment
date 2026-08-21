@@ -58,6 +58,7 @@ public:
         bool replace_invalid_with_max = true;
 
         // ---- debug ----
+        bool log_distribution = false;
         bool save_debug_image = false;
         float debug_save_interval_s = 2.0f;
         std::string debug_save_dir = "/tmp/depth_debug";
@@ -109,6 +110,7 @@ private:
 
     // ---- statistics ----
     int64_t processed_frame_count_ = 0;
+    double last_distribution_log_time_ = 0.0;
     double last_save_time_ = 0.0;
 };
 
