@@ -238,7 +238,9 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
+            // roll_limit = 1.0 rad (~57deg, sideways is dangerous), pitch_limit = 1.5 rad (~86deg,
+            // near-vertical pitch is normal when jumping onto high platforms).
+            [&]()->bool{ return isaaclab::mdp::bad_orientation_roll_pitch(env.get(), 1.0f, 1.5f); },
             FSMStringMap.right.at("Passive")
         )
     );
