@@ -16,7 +16,6 @@ public:
     virtual void start() = 0;
     virtual void stop() = 0;
     virtual bool is_running() const = 0;
-    virtual bool is_available() const = 0;
     virtual bool is_ready() const = 0;
     virtual bool has_failed() const = 0;
 };

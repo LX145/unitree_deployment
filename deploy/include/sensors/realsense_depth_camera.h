@@ -82,7 +82,6 @@ public:
 
     /// Returns true if the capture thread is currently running.
     bool is_running() const override { return running_.load(); }
-    bool is_available() const override;
     bool is_ready() const override { return ready_.load(); }
     bool has_failed() const override { return failed_.load(); }
 

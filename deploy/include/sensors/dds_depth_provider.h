@@ -76,7 +76,6 @@ public:
     }
 
     bool is_running() const override { return running_.load(); }
-    bool is_available() const override { return true; }
     bool is_ready() const override { return ready_.load(); }
     bool has_failed() const override { return false; }
 

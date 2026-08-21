@@ -144,16 +144,23 @@ int main()
     RealSenseDepthCamera cam(cfg, robot);
     cam.start();
 
-    spdlog::info("Depth camera running.  Press Ctrl+C or close window to stop.");
+    spdlog::info("Depth camera starting; waiting for first valid frame...");
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
 #ifdef HAS_OPENCV
-    cv::namedWindow("RealSense D435i Depth", cv::WINDOW_AUTOSIZE);
+    bool window_created = false;
 #endif
 
     int frame_count = 0;
+    bool camera_failed = false;
     while (!g_stop) {
+        if (cam.has_failed()) {
+            spdlog::error("Depth camera test failed: pipeline did not produce a valid stream");
+            camera_failed = true;
+            break;
+        }
+
         // Read latest depth from shared buffer
         std::vector<float> frame;
         double ts = 0;
@@ -167,6 +174,11 @@ int main()
 
         if (!frame.empty()) {
 #ifdef HAS_OPENCV
+            if (!window_created) {
+                cv::namedWindow("RealSense D435i Depth", cv::WINDOW_AUTOSIZE);
+                window_created = true;
+                spdlog::info("First valid depth frame received. Press Ctrl+C, Q, or ESC to stop.");
+            }
             show_depth_opencv(frame, cfg.out_width, cfg.out_height,
                               frame_count);
 
@@ -183,10 +195,6 @@ int main()
 #endif
             frame_count++;
         } else {
-#ifdef HAS_OPENCV
-            // keep the window alive while waiting for first frame
-            cv::waitKey(50);
-#endif
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
@@ -207,6 +215,11 @@ int main()
             spdlog::info("Final depth_obs: size={} min={:.4f} max={:.4f} mean={:.4f}",
                          obs.size(), *mn, *mx, mean);
         }
+    }
+
+    if (camera_failed) {
+        spdlog::error("Done (failed).");
+        return 1;
     }
 
     spdlog::info("Done.");

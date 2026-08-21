@@ -227,6 +227,9 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
             auto cam_cfg = RealSenseDepthCamera::Config::from_yaml(dc);
             depth_provider_ = std::make_shared<RealSenseDepthCamera>(cam_cfg, env->robot);
             spdlog::info("[Depth] aarch64 detected: using RealSense provider");
+            // Warm up the camera before the operator requests RL. Entry is
+            // allowed only after the first processed frame is available.
+            depth_provider_->start();
 #else
             throw std::runtime_error(
                 "Depth policy on aarch64 requires librealsense2 support at build time");
@@ -268,10 +271,19 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 
 bool State_RLBase::can_enter()
 {
-    if (depth_provider_ && !depth_provider_->is_available()) {
-        spdlog::warn("[Depth] RL entry rejected: no depth camera detected; staying in FixStand");
+#if defined(__aarch64__)
+    if (depth_provider_ && !depth_provider_->is_ready()) {
+        // A previous initialization attempt may have finished with an error.
+        // Reap that thread and start a fresh asynchronous attempt, but never
+        // transition out of FixStand until a real frame has arrived.
+        if (!depth_provider_->is_running()) {
+            depth_provider_->stop();
+            depth_provider_->start();
+        }
+        spdlog::warn("[Depth] RL entry rejected: no valid depth frame; staying in FixStand");
         return false;
     }
+#endif
     return true;
 }
 
@@ -310,7 +322,7 @@ void State_RLBase::enter()
     action_limit_exceeded_.store(false);
 
     // Start depth provider (RealSense or DDS, depending on build)
-    if (depth_provider_) {
+    if (depth_provider_ && !depth_provider_->is_running()) {
         depth_provider_->start();
     }
 
@@ -351,7 +363,15 @@ void State_RLBase::exit()
 
     // Stop depth provider (if running)
     if (depth_provider_) {
+#if defined(__aarch64__)
+        // Keep a healthy RealSense stream warm across normal state changes.
+        // A failed thread must be joined before a later entry can restart it.
+        if (depth_provider_->has_failed()) {
+            depth_provider_->stop();
+        }
+#else
         depth_provider_->stop();
+#endif
     }
 
     if (log_file) {

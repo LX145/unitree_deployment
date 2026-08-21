@@ -87,17 +87,6 @@ RealSenseDepthCamera::~RealSenseDepthCamera()
     stop();
 }
 
-bool RealSenseDepthCamera::is_available() const
-{
-    try {
-        rs2::context context;
-        return context.query_devices().size() > 0;
-    } catch (const rs2::error& e) {
-        spdlog::warn("[Depth] failed to enumerate RealSense devices: {}", e.what());
-        return false;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // start / stop
 // ---------------------------------------------------------------------------
