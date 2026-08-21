@@ -108,12 +108,8 @@ private:
     std::atomic<bool> failed_{false};
 
     // ---- statistics ----
-    int64_t raw_frame_count_ = 0;
     int64_t processed_frame_count_ = 0;
-    double last_print_time_ = 0.0;
     double last_save_time_ = 0.0;
-    double last_depth_update_time_ = 0.0;
-    double first_frame_time_ = 0.0;
 };
 
 // helper: get monotonic time in seconds

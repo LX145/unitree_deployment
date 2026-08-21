@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <chrono>
 #include <deque>
-#include <numeric>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -240,7 +239,6 @@ void RealSenseDepthCamera::capture_loop()
             return;
         }
 
-        first_frame_time_ = now_sec();
         std::deque<std::vector<float>> history;
 
         // timing for rate control
@@ -264,8 +262,6 @@ void RealSenseDepthCamera::capture_loop()
                     running_.store(false);
                     break;
                 }
-
-                raw_frame_count_++;
 
                 rs2::depth_frame depth = frames.get_depth_frame();
                 if (!depth) {
@@ -304,7 +300,6 @@ void RealSenseDepthCamera::capture_loop()
                 ready_.store(true);
 
                 processed_frame_count_++;
-                last_depth_update_time_ = now_sec();
 
             } catch (const rs2::error& e) {
                 spdlog::warn("[Depth] RealSense error: {}", e.what());
@@ -318,46 +313,14 @@ void RealSenseDepthCamera::capture_loop()
                 break;
             }
 
-            // ---- periodic tasks (stats + debug save) ----
-            double now = now_sec();
-            {
-                double elapsed = now - first_frame_time_;
-                if (elapsed > 0 && (now - last_print_time_) >= 1.0) {
-                double raw_hz    = raw_frame_count_ / elapsed;
-                double proc_hz   = processed_frame_count_ / elapsed;
-                double age_ms    = (now - last_depth_update_time_) * 1000.0;
-
-                float dmin = 0, dmax = 0, dmean = 0;
-                size_t dsize = 0;
-                {
-                    std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
-                    if (robot_->data.depth_valid && !robot_->data.depth_obs.empty()) {
-                        dsize = robot_->data.depth_obs.size();
-                        auto [mn, mx] = std::minmax_element(
-                            robot_->data.depth_obs.begin(), robot_->data.depth_obs.end());
-                        dmin  = *mn;
-                        dmax  = *mx;
-                        dmean = std::accumulate(robot_->data.depth_obs.begin(),
-                                                robot_->data.depth_obs.end(), 0.0f) / dsize;
-                    }
-                }
-
-                spdlog::info("[Depth] raw={:.1f}Hz proc={:.1f}Hz age={:.1f}ms "
-                             "valid={} size={} min={:.3f} max={:.3f} mean={:.3f}",
-                             raw_hz, proc_hz, age_ms,
-                             robot_->data.depth_valid, dsize, dmin, dmax, dmean);
-
-                last_print_time_ = now;
-            }
-
             // ---- optional debug save ----
+            double now = now_sec();
             if (cfg_.save_debug_image && (now - last_save_time_) >= cfg_.debug_save_interval_s) {
                 if (!history.empty()) {
                     save_debug_frame(history.back());
                 }
                 last_save_time_ = now;
             }
-            } // end of 'now' scope
 
             // ---- rate limit ----
             next_wake += std::chrono::duration_cast<clock::duration>(desired_period);
