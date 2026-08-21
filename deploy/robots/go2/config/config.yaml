@@ -7,6 +7,9 @@ FSM:
     Velocity:
       id: 3
       type: RLBase
+    DepthVelocity:
+      id: 4
+      type: RLBase
   Passive:
     transitions: 
       FixStand: LT + A.on_pressed
@@ -16,6 +19,7 @@ FSM:
     transitions: 
       Passive: LT + B.on_pressed
       Velocity: start.on_pressed
+      DepthVelocity: LT + X.on_pressed
     kp: [60, 80, 80, 60, 80, 80, 60, 80, 80, 60, 80, 80]
     kd: [5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4]
     ts: [0, 1, 2]
@@ -28,5 +32,9 @@ FSM:
     transitions: 
       Passive: LT + B.on_pressed
       FixStand: LT + A.on_pressed
+    policy_dir: config/policy/velocity/cts_gait
+  DepthVelocity:
+    transitions:
+      Passive: LT + B.on_pressed
+      FixStand: LT + A.on_pressed
     policy_dir: config/policy/velocity/depth_student
-    
