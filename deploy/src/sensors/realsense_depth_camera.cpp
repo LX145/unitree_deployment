@@ -21,6 +21,31 @@
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+struct CropRect {
+    int x;
+    int y;
+    int width;
+    int height;
+};
+
+CropRect horizontal_crop_for_target_fx(int raw_w, int raw_h, int out_w,
+                                       float raw_fx, float raw_cx,
+                                       float target_fx)
+{
+    CropRect crop{0, 0, raw_w, raw_h};
+    if (target_fx <= 0.0f) return crop;
+
+    crop.width = std::clamp(
+        static_cast<int>(std::lround(raw_fx * out_w / target_fx)),
+        1, raw_w);
+    const float scale_x = static_cast<float>(out_w) / crop.width;
+    const float target_cx = (out_w - 1.0f) * 0.5f;
+    crop.x = std::clamp(
+        static_cast<int>(std::lround(raw_cx - target_cx / scale_x)),
+        0, raw_w - crop.width);
+    return crop;
+}
+
 double now_sec()
 {
     static auto start = std::chrono::steady_clock::now();
@@ -53,6 +78,7 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.out_height = node["height"].as<int>(58);
     c.history    = node["history"].as<int>(1);
     c.update_hz  = node["update_hz"].as<float>(10.0f);
+    c.target_fx  = node["target_fx"].as<float>(0.0f);
 
     // normalization
     c.min_depth  = node["min_depth"].as<float>(0.0f);
@@ -124,7 +150,8 @@ void RealSenseDepthCamera::stop()
 // ---------------------------------------------------------------------------
 std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
                                                         int raw_w, int raw_h,
-                                                        float depth_scale)
+                                                        float depth_scale,
+                                                        int crop_x, int crop_width)
 {
     const int w = cfg_.out_width;
     const int h = cfg_.out_height;
@@ -135,7 +162,7 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
         int src_y = y * raw_h / h;
         const uint16_t* row = raw + src_y * raw_w;
         for (int x = 0; x < w; ++x) {
-            int src_x = x * raw_w / w;
+            int src_x = crop_x + x * crop_width / w;
             float d = static_cast<float>(row[src_x]) * depth_scale;
 
             // invalid depth → replace with max_depth
@@ -265,6 +292,7 @@ void RealSenseDepthCamera::capture_loop()
                              RS2_FORMAT_Z16, cfg_.raw_fps);
 
         float depth_scale = 0.001f;  // default: 1 mm
+        CropRect crop{0, 0, cfg_.raw_width, cfg_.raw_height};
         try {
             rs2::pipeline_profile profile = pipe.start(rs_cfg);
             auto depth_sensor = profile.get_device().first<rs2::depth_sensor>();
@@ -276,16 +304,21 @@ void RealSenseDepthCamera::capture_loop()
             const auto video_profile =
                 profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
             const auto intrinsics = video_profile.get_intrinsics();
-            const float scale_x = static_cast<float>(cfg_.out_width) / intrinsics.width;
-            const float scale_y = static_cast<float>(cfg_.out_height) / intrinsics.height;
+            crop = horizontal_crop_for_target_fx(
+                intrinsics.width, intrinsics.height, cfg_.out_width,
+                intrinsics.fx, intrinsics.ppx, cfg_.target_fx);
+            const float scale_x = static_cast<float>(cfg_.out_width) / crop.width;
+            const float scale_y = static_cast<float>(cfg_.out_height) / crop.height;
             spdlog::info(
                 "[Depth] intrinsics raw={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}; "
-                "resized={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}",
+                "crop=({}, {}) {}x{}; resized={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}",
                 intrinsics.width, intrinsics.height,
                 intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy,
+                crop.x, crop.y, crop.width, crop.height,
                 cfg_.out_width, cfg_.out_height,
                 intrinsics.fx * scale_x, intrinsics.fy * scale_y,
-                intrinsics.ppx * scale_x, intrinsics.ppy * scale_y);
+                (intrinsics.ppx - crop.x) * scale_x,
+                (intrinsics.ppy - crop.y) * scale_y);
         } catch (const rs2::error& e) {
             spdlog::error("[Depth] failed to start RealSense pipeline: {}", e.what());
             spdlog::error("[Depth] check that D435i is connected via USB 3.x");
@@ -330,7 +363,8 @@ void RealSenseDepthCamera::capture_loop()
                 int raw_h = depth.get_height();
 
                 // ---- preprocess ----
-                auto frame = process_depth(raw, raw_w, raw_h, depth_scale);
+                auto frame = process_depth(
+                    raw, raw_w, raw_h, depth_scale, crop.x, crop.width);
 
                 const double stats_now = now_sec();
                 if (cfg_.log_distribution &&

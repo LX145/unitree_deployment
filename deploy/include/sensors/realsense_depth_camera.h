@@ -20,7 +20,7 @@ class Articulation;
  * @brief RealSense D435i depth camera wrapper for RL policy deployment.
  *
  * Runs a background thread that captures depth frames at configurable Hz,
- * preprocesses them (resize, clip, normalize), and writes the result into
+ * preprocesses them (center-crop, resize, clip, normalize), and writes the result into
  * ArticulationData::depth_obs under a mutex for consumption by the policy.
  *
  * Usage:
@@ -47,6 +47,7 @@ public:
         int out_height = 58;
         int history = 1;
         float update_hz = 10.0f;
+        float target_fx = 0.0f;  // > 0 enables horizontal crop to this output focal length
 
         // ---- depth normalization ----
         float min_depth = 0.0f;
@@ -90,12 +91,13 @@ private:
     /// The background loop: capture → preprocess → write to robot->data.
     void capture_loop();
 
-    /// Process a single raw depth frame (z16) into a normalized, resized
+    /// Process a single raw depth frame (z16) into a normalized, center-cropped and resized
     /// flat vector of length out_width * out_height.  Returned values are
     /// in [output_min, output_max].
     std::vector<float> process_depth(const uint16_t* raw,
                                      int raw_w, int raw_h,
-                                     float depth_scale);
+                                     float depth_scale,
+                                     int crop_x, int crop_width);
 
     /// Save the normalized depth image to disk (PGM text format + raw binary).
     void save_debug_frame(const std::vector<float>& frame);

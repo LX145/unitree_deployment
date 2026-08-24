@@ -66,8 +66,12 @@ observations:
 depth_camera:
   enable: true
   monitor_only: false
+  raw_width: 848
+  raw_height: 480
+  raw_fps: 60
   width: 87
   height: 58
+  target_fx: 45.8394
   min_depth: 0.0
   max_depth: 2.0
   output_min: -0.5

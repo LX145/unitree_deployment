@@ -116,13 +116,14 @@ int main()
     RealSenseDepthCamera::Config cfg;
     cfg.enable       = true;
     cfg.monitor_only = true;
-    cfg.raw_width    = 480;
-    cfg.raw_height   = 270;
+    cfg.raw_width    = 848;
+    cfg.raw_height   = 480;
     cfg.raw_fps      = 60;
     cfg.out_width    = 87;
     cfg.out_height   = 58;
     cfg.history      = 1;
     cfg.update_hz    = 10.0f;
+    cfg.target_fx    = 45.8394f;
     cfg.min_depth    = 0.0f;
     cfg.max_depth    = 2.0f;
     cfg.output_min   = -0.5f;
