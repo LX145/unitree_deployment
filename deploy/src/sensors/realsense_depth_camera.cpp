@@ -2,6 +2,7 @@
 // All rights reserved.
 
 #include "sensors/realsense_depth_camera.h"
+#include "sensors/realsense_diagnostics.h"
 #include "isaaclab/assets/articulation/articulation.h"
 
 #include <librealsense2/rs.hpp>
@@ -314,6 +315,7 @@ void RealSenseDepthCamera::capture_loop()
             auto depth_sensor = profile.get_device().first<rs2::depth_sensor>();
             if (depth_sensor) {
                 depth_scale = depth_sensor.get_depth_scale();
+                realsense_diagnostics::install_notification_callback(depth_sensor);
             }
             spdlog::info("[Depth] pipeline started (depth_scale={})", depth_scale);
 
@@ -341,10 +343,8 @@ void RealSenseDepthCamera::capture_loop()
             const auto error_now = std::chrono::steady_clock::now();
             if (last_start_error_log.time_since_epoch().count() == 0 ||
                 error_now - last_start_error_log >= std::chrono::seconds(10)) {
-                spdlog::error(
-                    "[Depth] failed to start RealSense pipeline ({} failures): {}; "
-                    "retries continue in background",
-                    total_start_failures, e.what());
+                realsense_diagnostics::log_pipeline_error(e, total_start_failures);
+                realsense_diagnostics::log_transport(device, "pipeline_start_failed");
                 last_start_error_log = error_now;
             }
             ready_.store(false);
@@ -388,6 +388,7 @@ void RealSenseDepthCamera::capture_loop()
                 rs2::frameset frames;
                 if (!pipe.try_wait_for_frames(&frames, 1000)) {
                     spdlog::error("[Depth] no frame received for 1 second; marking camera failed");
+                    realsense_diagnostics::log_transport(device, "frame_timeout");
                     {
                         std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
                         robot_->data.depth_valid = false;
@@ -457,7 +458,11 @@ void RealSenseDepthCamera::capture_loop()
                 processed_frame_count_++;
 
             } catch (const rs2::error& e) {
-                spdlog::warn("[Depth] RealSense error: {}", e.what());
+                spdlog::error(
+                    "[Depth] RealSense streaming error: {}; function={}, args={}, exception_type={}",
+                    e.what(), e.get_failed_function(), e.get_failed_args(),
+                    rs2_exception_type_to_string(e.get_type()));
+                realsense_diagnostics::log_transport(device, "streaming_exception");
                 {
                     std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
                     robot_->data.depth_valid = false;
