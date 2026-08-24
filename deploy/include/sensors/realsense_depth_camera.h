@@ -112,7 +112,9 @@ private:
 
     // ---- statistics ----
     int64_t processed_frame_count_ = 0;
+#ifdef ENABLE_DEPTH_STATS
     double last_distribution_log_time_ = 0.0;
+#endif
     double last_save_time_ = 0.0;
 };
 

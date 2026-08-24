@@ -181,6 +181,7 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
     return out;
 }
 
+#ifdef ENABLE_DEPTH_STATS
 static void log_depth_distribution(const std::vector<float>& depth_obs,
                                    int w, int h, float output_max,
                                    int64_t depth_seq)
@@ -218,6 +219,7 @@ static void log_depth_distribution(const std::vector<float>& depth_obs,
         depth_seq, mean, saturated_count, depth_obs.size(), saturated_percent,
         row_profile.str());
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // debug save
@@ -366,6 +368,7 @@ void RealSenseDepthCamera::capture_loop()
                 auto frame = process_depth(
                     raw, raw_w, raw_h, depth_scale, crop.x, crop.width);
 
+#ifdef ENABLE_DEPTH_STATS
                 const double stats_now = now_sec();
                 if (cfg_.log_distribution &&
                     (last_distribution_log_time_ == 0.0 ||
@@ -374,6 +377,7 @@ void RealSenseDepthCamera::capture_loop()
                                            cfg_.output_max, processed_frame_count_ + 1);
                     last_distribution_log_time_ = stats_now;
                 }
+#endif
 
                 // ---- manage history ----
                 history.push_back(std::move(frame));

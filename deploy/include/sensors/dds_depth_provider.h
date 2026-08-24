@@ -12,7 +12,7 @@
 #include <memory>
 #include <algorithm>
 #include <atomic>
-#ifdef ENABLE_MUJOCO_DEPTH_STATS
+#ifdef ENABLE_DEPTH_STATS
 #include <chrono>
 #include <iomanip>
 #include <numeric>
@@ -46,7 +46,7 @@ public:
         if (!robot_) {
             throw std::runtime_error("DDSDepthProvider: robot must not be null");
         }
-#ifdef ENABLE_MUJOCO_DEPTH_STATS
+#ifdef ENABLE_DEPTH_STATS
         log_distribution_ = cfg["log_distribution"].as<bool>(false);
 #endif
     }
@@ -100,7 +100,7 @@ public:
 private:
     void log_distribution(const std::vector<float>& depth_obs)
     {
-#ifdef ENABLE_MUJOCO_DEPTH_STATS
+#ifdef ENABLE_DEPTH_STATS
         if (!log_distribution_ ||
             depth_obs.size() != static_cast<std::size_t>(width_ * height_)) return;
 
@@ -148,13 +148,13 @@ private:
     std::shared_ptr<unitree::robot::SubscriptionBase<HeightMap_t>> sub_;
     std::atomic<bool> running_{false};
     std::atomic<bool> ready_{false};
-#ifdef ENABLE_MUJOCO_DEPTH_STATS
+#ifdef ENABLE_DEPTH_STATS
     bool log_distribution_ = false;
 #endif
     int width_ = 87;
     int height_ = 58;
     float output_max_ = 0.5f;
-#ifdef ENABLE_MUJOCO_DEPTH_STATS
+#ifdef ENABLE_DEPTH_STATS
     std::chrono::steady_clock::time_point last_distribution_log_time_{};
 #endif
 };
