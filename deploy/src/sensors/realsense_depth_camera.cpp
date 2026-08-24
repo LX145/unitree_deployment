@@ -274,17 +274,20 @@ void RealSenseDepthCamera::capture_loop()
 {
     spdlog::info("[Depth] capture_loop starting...");
 
-    // Keep the pipeline lifetime local so its USB handles are released before
-    // the capture thread exits.
-    {
+    // Keep a supervisor alive across USB disconnects. Pipeline teardown and
+    // reconnection happen only on this worker thread, never on the FSM thread.
+    while (running_.load()) {
+        // Keep each pipeline lifetime local so USB handles are released before
+        // the next reconnect attempt.
+        {
         // ---- start RealSense pipeline ----
         rs2::context context;
         if (context.query_devices().size() == 0) {
             spdlog::error("[Depth] no RealSense device detected");
             ready_.store(false);
             failed_.store(true);
-            running_.store(false);
-            return;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
         }
 
         rs2::pipeline pipe(context);
@@ -326,8 +329,8 @@ void RealSenseDepthCamera::capture_loop()
             spdlog::error("[Depth] check that D435i is connected via USB 3.x");
             ready_.store(false);
             failed_.store(true);
-            running_.store(false);
-            return;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            continue;
         }
 
         std::deque<std::vector<float>> history;
@@ -350,7 +353,6 @@ void RealSenseDepthCamera::capture_loop()
                     }
                     ready_.store(false);
                     failed_.store(true);
-                    running_.store(false);
                     break;
                 }
 
@@ -401,6 +403,7 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_seq++;
                 }
                 ready_.store(true);
+                failed_.store(false);
 
                 processed_frame_count_++;
 
@@ -412,7 +415,6 @@ void RealSenseDepthCamera::capture_loop()
                 }
                 ready_.store(false);
                 failed_.store(true);
-                running_.store(false);
                 break;
             }
 
@@ -441,6 +443,13 @@ void RealSenseDepthCamera::capture_loop()
         } catch (const rs2::error& e) {
             spdlog::warn("[Depth] pipeline stop failed: {}", e.what());
         }
-    } // pipeline + device destroyed here → USB handles released
+        } // pipeline + device destroyed here → USB handles released
+
+        if (running_.load()) {
+            spdlog::warn("[Depth] reconnecting RealSense pipeline in 1 second");
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+    ready_.store(false);
     spdlog::info("[Depth] capture_loop exited");
 }

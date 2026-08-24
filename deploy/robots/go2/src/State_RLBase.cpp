@@ -214,13 +214,8 @@ bool State_RLBase::can_enter()
 {
 #if defined(__aarch64__)
     if (depth_provider_ && !depth_provider_->is_ready()) {
-        // A previous initialization attempt may have finished with an error.
-        // Reap that thread and start a fresh asynchronous attempt, but never
-        // transition out of FixStand until a real frame has arrived.
-        if (!depth_provider_->is_running()) {
-            depth_provider_->stop();
-            depth_provider_->start();
-        }
+        // RealSense recovery runs entirely on its background supervisor. Never
+        // join or restart the camera from the 1 kHz FSM thread.
         spdlog::warn("[Depth] RL entry rejected: no valid depth frame; staying in FixStand");
         return false;
     }
@@ -290,16 +285,8 @@ void State_RLBase::exit()
         policy_thread.join();
     }
 
-    // Stop depth provider (if running)
-    if (depth_provider_) {
-#if defined(__aarch64__)
-        // Keep a healthy RealSense stream warm across normal state changes.
-        // A failed thread must be joined before a later entry can restart it.
-        if (depth_provider_->has_failed()) {
-            depth_provider_->stop();
-        }
-#endif
-    }
+    // Keep the depth provider warm across state changes. In particular, never
+    // block the FSM thread on RealSense pipeline teardown after a USB fault.
 
     if (log_file) {
         fflush(log_file);
