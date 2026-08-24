@@ -10,7 +10,6 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include <atomic>
 
 class DepthProvider;  // forward declaration
 
@@ -40,7 +39,6 @@ private:
     // Depth provider: RealSense (real) or DDS (sim), both write to env->robot->data.depth_obs
     std::shared_ptr<DepthProvider> depth_provider_;
     std::vector<float> entry_joint_pos_;
-    std::atomic<bool> action_limit_exceeded_{false};
 };
 
 REGISTER_FSM(State_RLBase)

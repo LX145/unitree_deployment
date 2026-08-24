@@ -244,16 +244,8 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         }
     }
 
-    // Camera acquisition failures and unreasonable raw policy actions are fatal
-    // for the current RL state. Insert these before joystick transitions so the
-    // safety transition has priority in the 1 kHz FSM loop.
-    this->registered_checks.insert(
-        this->registered_checks.begin(),
-        std::make_pair(
-            [&]()->bool{ return action_limit_exceeded_.load(); },
-            FSMStringMap.right.at("Passive")
-        )
-    );
+    // Camera acquisition failures are fatal for the current RL state. Insert
+    // this before joystick transitions so it has priority in the 1 kHz FSM loop.
     this->registered_checks.insert(
         this->registered_checks.begin(),
         std::make_pair(
@@ -292,10 +284,9 @@ bool State_RLBase::can_enter()
 
 void State_RLBase::run()
 {
-    // Do not apply policy targets until the first depth frame arrives, or after
-    // the provider/action safety check has failed. Hold the entry posture for
-    // this cycle; CtrlFSM will transition to Passive immediately on failure.
-    if ((depth_provider_ && !depth_provider_->is_ready()) || action_limit_exceeded_.load()) {
+    // Do not apply policy targets until the first depth frame arrives. Hold the
+    // entry posture for this cycle; CtrlFSM will transition on provider failure.
+    if (depth_provider_ && !depth_provider_->is_ready()) {
         for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
             lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = entry_joint_pos_[i];
         }
@@ -322,8 +313,6 @@ void State_RLBase::enter()
     env->robot->update();
     entry_joint_pos_.assign(env->robot->data.joint_pos.data(),
                             env->robot->data.joint_pos.data() + env->robot->data.joint_pos.size());
-    action_limit_exceeded_.store(false);
-
     // Start depth provider (RealSense or DDS, depending on build)
     if (depth_provider_ && !depth_provider_->is_running()) {
         depth_provider_->start();
@@ -342,15 +331,6 @@ void State_RLBase::enter()
         while (policy_thread_running)
         {
             env->step();
-            const auto raw_action = env->action_manager->action();
-            for (float value : raw_action) {
-                if (std::abs(value) > 10.0f) {
-                    if (!action_limit_exceeded_.exchange(true)) {
-                        spdlog::error("[RL Safety] raw action magnitude exceeded 10: {}", value);
-                    }
-                    break;
-                }
-            }
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }
