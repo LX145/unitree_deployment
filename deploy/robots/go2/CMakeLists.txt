@@ -3,6 +3,9 @@ project(go2_controller)
 
 set(CMAKE_CXX_STANDARD 17)
 
+option(ENABLE_MUJOCO_DEPTH_STATS
+       "Compile periodic [Depth Stats][MuJoCo DDS] logging" OFF)
+
 find_package(Boost REQUIRED COMPONENTS program_options)
 find_package(yaml-cpp REQUIRED)
 
@@ -77,6 +80,12 @@ if(HAS_REALSENSE)
 endif()
 
 add_library(${PROJECT_NAME}_lib ${ADD_SRC_LIST} ${SENSOR_SRC_LIST})
+if(ENABLE_MUJOCO_DEPTH_STATS)
+    target_compile_definitions(${PROJECT_NAME}_lib PRIVATE ENABLE_MUJOCO_DEPTH_STATS)
+    message(STATUS "MuJoCo DDS depth statistics: ENABLED")
+else()
+    message(STATUS "MuJoCo DDS depth statistics: DISABLED")
+endif()
 link_libraries(${PROJECT_NAME}_lib)
 
 add_executable(go2_ctrl main.cpp)

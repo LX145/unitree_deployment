@@ -45,9 +45,21 @@ public:
         }
 
         // register for all states
+        auto timeout_reported = std::make_shared<bool>(false);
         registered_checks.emplace_back(
             std::make_pair(
-                []()->bool{ return lowstate->isTimeout(); },
+                [timeout_reported, state_string]()->bool{
+                    const bool timed_out = lowstate->isTimeout();
+                    if (timed_out && !*timeout_reported) {
+                        spdlog::error(
+                            "[FSM Safety] rt/lowstate timeout in {}; requesting Passive",
+                            state_string);
+                        *timeout_reported = true;
+                    } else if (!timed_out) {
+                        *timeout_reported = false;
+                    }
+                    return timed_out;
+                },
                 FSMStringMap.right.at("Passive")
             )
         );

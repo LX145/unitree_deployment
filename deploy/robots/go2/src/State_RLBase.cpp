@@ -102,7 +102,7 @@ REGISTER_OBSERVATION(gait_state)
     else disturb_trigger_count = 0;
 
     bool real_wake_up = (disturb_trigger_count > 10);
-    bool can_sleep = (avg_lin_acc < 2.0) && (avg_ang_acc < 5.0f);
+    bool can_sleep = avg_ang_acc < 5.0f;
 
     if (real_wake_up) is_disturbed = true;
     if (can_sleep) is_disturbed = false;
@@ -249,16 +249,40 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     this->registered_checks.insert(
         this->registered_checks.begin(),
         std::make_pair(
-            [&]()->bool{ return depth_provider_ && depth_provider_->has_failed(); },
+            [&]()->bool{
+                const bool failed = depth_provider_ && depth_provider_->has_failed();
+                if (failed) {
+                    spdlog::error(
+                        "[RL Safety] depth provider failed in {}; requesting Passive",
+                        getStateString());
+                }
+                return failed;
+            },
             FSMStringMap.right.at("Passive")
         )
     );
 
     this->registered_checks.emplace_back(
         std::make_pair(
-            // roll_limit = 1.0 rad (~57deg, sideways is dangerous), pitch_limit = 1.5 rad (~86deg,
-            // near-vertical pitch is normal when jumping onto high platforms).
-            [&]()->bool{ return isaaclab::mdp::bad_orientation_roll_pitch(env.get(), 1.0f, 1.5f); },
+            // Keep the sideways limit tight, but allow up to ~100deg fore/aft
+            // tilt for near-vertical push-off when jumping onto high platforms.
+            [&]()->bool{
+                constexpr float roll_limit = 1.0f;
+                constexpr float pitch_limit = 1.75f;
+                auto& gravity = env->robot->data.projected_gravity_b;
+                const auto tilt = isaaclab::mdp::gravity_tilt_components(
+                    gravity[0], gravity[1], gravity[2]);
+                const bool exceeded = std::fabs(tilt.roll) > roll_limit ||
+                                      std::fabs(tilt.pitch) > pitch_limit;
+                if (exceeded) {
+                    spdlog::warn(
+                        "[RL Safety] orientation limit exceeded in {}: "
+                        "roll_tilt={:.3f} rad (limit {:.3f}), "
+                        "pitch_tilt={:.3f} rad (limit {:.3f}); requesting Passive",
+                        getStateString(), tilt.roll, roll_limit, tilt.pitch, pitch_limit);
+                }
+                return exceeded;
+            },
             FSMStringMap.right.at("Passive")
         )
     );
