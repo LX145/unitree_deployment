@@ -276,19 +276,30 @@ void RealSenseDepthCamera::capture_loop()
 
     // Keep a supervisor alive across USB disconnects. Pipeline teardown and
     // reconnection happen only on this worker thread, never on the FSM thread.
+    int consecutive_start_failures = 0;
+    int total_start_failures = 0;
+    bool no_device_reported = false;
+    auto last_start_error_log = std::chrono::steady_clock::time_point{};
+    auto last_hardware_reset = std::chrono::steady_clock::time_point{};
     while (running_.load()) {
         // Keep each pipeline lifetime local so USB handles are released before
         // the next reconnect attempt.
         {
         // ---- start RealSense pipeline ----
         rs2::context context;
-        if (context.query_devices().size() == 0) {
-            spdlog::error("[Depth] no RealSense device detected");
+        auto devices = context.query_devices();
+        if (devices.size() == 0) {
+            if (!no_device_reported) {
+                spdlog::error(
+                    "[Depth] no RealSense device detected; retrying silently until it reappears");
+                no_device_reported = true;
+            }
             ready_.store(false);
             failed_.store(true);
             std::this_thread::sleep_for(std::chrono::seconds(1));
             continue;
         }
+        rs2::device device = devices.front();
 
         rs2::pipeline pipe(context);
         rs2::config rs_cfg;
@@ -325,11 +336,41 @@ void RealSenseDepthCamera::capture_loop()
                 (intrinsics.ppx - crop.x) * scale_x,
                 (intrinsics.ppy - crop.y) * scale_y);
         } catch (const rs2::error& e) {
-            spdlog::error("[Depth] failed to start RealSense pipeline: {}", e.what());
-            spdlog::error("[Depth] check that D435i is connected via USB 3.x");
+            ++consecutive_start_failures;
+            ++total_start_failures;
+            const auto error_now = std::chrono::steady_clock::now();
+            if (last_start_error_log.time_since_epoch().count() == 0 ||
+                error_now - last_start_error_log >= std::chrono::seconds(10)) {
+                spdlog::error(
+                    "[Depth] failed to start RealSense pipeline ({} failures): {}; "
+                    "retries continue in background",
+                    total_start_failures, e.what());
+                last_start_error_log = error_now;
+            }
             ready_.store(false);
             failed_.store(true);
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            // After an electrical/USB transient the device can remain
+            // enumerated at 5 Gbit/s while all VIDIOC_S_FMT requests return
+            // EIO. Recreating rs2::pipeline is then insufficient; periodically
+            // reset the D435i firmware and let it re-enumerate.
+            bool reset_requested = false;
+            if (consecutive_start_failures >= 3) {
+                if (last_hardware_reset.time_since_epoch().count() == 0 ||
+                    error_now - last_hardware_reset >= std::chrono::seconds(10)) {
+                    try {
+                        spdlog::warn("[Depth] resetting D435i after repeated start failures");
+                        device.hardware_reset();
+                        reset_requested = true;
+                        last_hardware_reset = error_now;
+                    } catch (const rs2::error& reset_error) {
+                        spdlog::warn("[Depth] D435i hardware reset failed: {}", reset_error.what());
+                    }
+                }
+                consecutive_start_failures = 0;
+            }
+            std::this_thread::sleep_for(
+                reset_requested ? std::chrono::seconds(3) : std::chrono::seconds(1));
             continue;
         }
 
@@ -403,7 +444,15 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_seq++;
                 }
                 ready_.store(true);
-                failed_.store(false);
+                const bool recovered = failed_.exchange(false);
+                if (recovered) {
+                    spdlog::info("[Depth] RealSense stream recovered; valid frames resumed");
+                }
+                consecutive_start_failures = 0;
+                total_start_failures = 0;
+                no_device_reported = false;
+                last_start_error_log = std::chrono::steady_clock::time_point{};
+                last_hardware_reset = std::chrono::steady_clock::time_point{};
 
                 processed_frame_count_++;
 
