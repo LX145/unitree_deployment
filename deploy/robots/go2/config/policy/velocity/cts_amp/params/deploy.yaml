@@ -68,7 +68,7 @@ depth_camera:
   monitor_only: false
   raw_width: 848
   raw_height: 480
-  raw_fps: 60
+  raw_fps: 30
   width: 87
   height: 58
   target_fx: 45.8394

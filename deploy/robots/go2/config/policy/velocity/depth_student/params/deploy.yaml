@@ -73,5 +73,5 @@ observations:
       clip: null
       history_length: 1
 depth_camera: {enable: true, monitor_only: false, log_distribution: true, raw_width: 848, raw_height: 480,
-  raw_fps: 60, width: 87, height: 58, target_fx: 45.8394, min_depth: 0.0, max_depth: 2.0,
+  raw_fps: 30, width: 87, height: 58, target_fx: 45.8394, min_depth: 0.0, max_depth: 2.0,
   output_min: -0.5, output_max: 0.5, update_hz: 10.0}

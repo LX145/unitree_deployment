@@ -118,7 +118,7 @@ int main()
     cfg.monitor_only = true;
     cfg.raw_width    = 848;
     cfg.raw_height   = 480;
-    cfg.raw_fps      = 60;
+    cfg.raw_fps      = 30;
     cfg.out_width    = 87;
     cfg.out_height   = 58;
     cfg.history      = 1;
