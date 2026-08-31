@@ -45,6 +45,31 @@ void log_pipeline_error(const rs2::error& error, int total_failures)
         rs2_exception_type_to_string(error.get_type()));
 }
 
+void install_device_change_callback(rs2::context& context, const rs2::device& device)
+{
+    context.set_devices_changed_callback([device](rs2::event_information event) {
+        if (event.was_removed(device)) {
+            spdlog::error(
+                "[Depth] USB removal detected by librealsense; the D435i lost its physical/power/data link");
+        }
+
+        const auto added = event.get_new_devices();
+        for (auto&& new_device : added) {
+            try {
+                const char* name = new_device.supports(RS2_CAMERA_INFO_NAME)
+                    ? new_device.get_info(RS2_CAMERA_INFO_NAME) : "unknown";
+                const char* usb_type = new_device.supports(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR)
+                    ? new_device.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR) : "unknown";
+                spdlog::info(
+                    "[Depth] USB device re-enumerated: name={}, usb_type={}",
+                    name, usb_type);
+            } catch (const rs2::error& error) {
+                spdlog::warn("[Depth] failed to inspect re-enumerated device: {}", error.what());
+            }
+        }
+    });
+}
+
 void install_notification_callback(const rs2::depth_sensor& sensor)
 {
     sensor.set_notifications_callback([](rs2::notification notification) {

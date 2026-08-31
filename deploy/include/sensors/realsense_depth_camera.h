@@ -57,6 +57,8 @@ public:
 
         // ---- processing ----
         bool replace_invalid_with_max = true;
+        int blur_kernel_size = 3;  // odd; 1 disables blur
+        float blur_sigma = 1.0f;
 
         // ---- debug ----
         bool log_distribution = false;

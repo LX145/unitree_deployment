@@ -3,6 +3,7 @@
 
 #include "sensors/realsense_depth_camera.h"
 #include "sensors/realsense_diagnostics.h"
+#include "sensors/realsense_depth_processing.h"
 #include "isaaclab/assets/articulation/articulation.h"
 
 #include <librealsense2/rs.hpp>
@@ -89,6 +90,8 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
 
     // processing
     c.replace_invalid_with_max = node["replace_invalid_with_max"].as<bool>(true);
+    c.blur_kernel_size = node["blur_kernel_size"].as<int>(3);
+    c.blur_sigma = node["blur_sigma"].as<float>(1.0f);
 
     // debug
     c.log_distribution       = node["log_distribution"].as<bool>(false);
@@ -131,8 +134,10 @@ void RealSenseDepthCamera::start()
     failed_.store(false);
     running_.store(true);
     thread_ = std::thread(&RealSenseDepthCamera::capture_loop, this);
-    spdlog::info("[Depth] camera thread started (update_hz={}, out={}x{}, history={})",
-                 cfg_.update_hz, cfg_.out_width, cfg_.out_height, cfg_.history);
+    spdlog::info(
+        "[Depth] camera thread started (update_hz={}, out={}x{}, history={}, resize=nearest, blur={}x{}, sigma={})",
+        cfg_.update_hz, cfg_.out_width, cfg_.out_height, cfg_.history,
+        cfg_.blur_kernel_size, cfg_.blur_kernel_size, cfg_.blur_sigma);
 }
 
 void RealSenseDepthCamera::stop()
@@ -156,28 +161,32 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
 {
     const int w = cfg_.out_width;
     const int h = cfg_.out_height;
-    std::vector<float> out(w * h);
+    std::vector<float> metric_depth(w * h);
 
+    // Match the training/deployment contract: crop the raw image and resize
+    // with nearest-neighbour sampling before applying the image blur.
     for (int y = 0; y < h; ++y) {
-        // nearest-neighbour source pixel
-        int src_y = y * raw_h / h;
+        const int src_y = y * raw_h / h;
         const uint16_t* row = raw + src_y * raw_w;
         for (int x = 0; x < w; ++x) {
-            int src_x = crop_x + x * crop_width / w;
+            const int src_x = crop_x + x * crop_width / w;
             float d = static_cast<float>(row[src_x]) * depth_scale;
 
-            // invalid depth → replace with max_depth
             if (d <= 0.0f && cfg_.replace_invalid_with_max) {
                 d = cfg_.max_depth;
             }
-
-            // clip
-            d = std::clamp(d, cfg_.min_depth, cfg_.max_depth);
-
-            // normalize to [output_min, output_max]
-            float t = (d - cfg_.min_depth) / (cfg_.max_depth - cfg_.min_depth);
-            out[y * w + x] = t * (cfg_.output_max - cfg_.output_min) + cfg_.output_min;
+            metric_depth[y * w + x] = std::clamp(d, cfg_.min_depth, cfg_.max_depth);
         }
+    }
+
+    realsense_processing::gaussian_blur(
+        metric_depth, w, h, cfg_.blur_kernel_size, cfg_.blur_sigma);
+
+    std::vector<float> out(w * h);
+    for (std::size_t i = 0; i < metric_depth.size(); ++i) {
+        const float t = (metric_depth[i] - cfg_.min_depth) /
+                        (cfg_.max_depth - cfg_.min_depth);
+        out[i] = t * (cfg_.output_max - cfg_.output_min) + cfg_.output_min;
     }
     return out;
 }
@@ -279,8 +288,11 @@ void RealSenseDepthCamera::capture_loop()
     // reconnection happen only on this worker thread, never on the FSM thread.
     int consecutive_start_failures = 0;
     int total_start_failures = 0;
+    int consecutive_frame_timeouts = 0;
     bool no_device_reported = false;
     auto last_start_error_log = std::chrono::steady_clock::time_point{};
+    auto last_frame_timeout_log = std::chrono::steady_clock::time_point{};
+    auto last_reconnect_log = std::chrono::steady_clock::time_point{};
     auto last_hardware_reset = std::chrono::steady_clock::time_point{};
     while (running_.load()) {
         // Keep each pipeline lifetime local so USB handles are released before
@@ -301,6 +313,7 @@ void RealSenseDepthCamera::capture_loop()
             continue;
         }
         rs2::device device = devices.front();
+        realsense_diagnostics::install_device_change_callback(context, device);
 
         rs2::pipeline pipe(context);
         rs2::config rs_cfg;
@@ -317,7 +330,9 @@ void RealSenseDepthCamera::capture_loop()
                 depth_scale = depth_sensor.get_depth_scale();
                 realsense_diagnostics::install_notification_callback(depth_sensor);
             }
-            spdlog::info("[Depth] pipeline started (depth_scale={})", depth_scale);
+            if (consecutive_frame_timeouts == 0) {
+                spdlog::info("[Depth] pipeline started (depth_scale={})", depth_scale);
+            }
 
             const auto video_profile =
                 profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
@@ -327,16 +342,18 @@ void RealSenseDepthCamera::capture_loop()
                 intrinsics.fx, intrinsics.ppx, cfg_.target_fx);
             const float scale_x = static_cast<float>(cfg_.out_width) / crop.width;
             const float scale_y = static_cast<float>(cfg_.out_height) / crop.height;
-            spdlog::info(
-                "[Depth] intrinsics raw={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}; "
-                "crop=({}, {}) {}x{}; resized={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}",
-                intrinsics.width, intrinsics.height,
-                intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy,
-                crop.x, crop.y, crop.width, crop.height,
-                cfg_.out_width, cfg_.out_height,
-                intrinsics.fx * scale_x, intrinsics.fy * scale_y,
-                (intrinsics.ppx - crop.x) * scale_x,
-                (intrinsics.ppy - crop.y) * scale_y);
+            if (consecutive_frame_timeouts == 0) {
+                spdlog::info(
+                    "[Depth] intrinsics raw={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}; "
+                    "crop=({}, {}) {}x{}; resized={}x{} fx={:.3f} fy={:.3f} cx={:.3f} cy={:.3f}",
+                    intrinsics.width, intrinsics.height,
+                    intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy,
+                    crop.x, crop.y, crop.width, crop.height,
+                    cfg_.out_width, cfg_.out_height,
+                    intrinsics.fx * scale_x, intrinsics.fy * scale_y,
+                    (intrinsics.ppx - crop.x) * scale_x,
+                    (intrinsics.ppy - crop.y) * scale_y);
+            }
         } catch (const rs2::error& e) {
             ++consecutive_start_failures;
             ++total_start_failures;
@@ -375,6 +392,7 @@ void RealSenseDepthCamera::capture_loop()
         }
 
         std::deque<std::vector<float>> history;
+        bool reset_after_stop = false;
 
         // timing for rate control
         using clock = std::chrono::steady_clock;
@@ -387,8 +405,18 @@ void RealSenseDepthCamera::capture_loop()
                 // ---- get frame ----
                 rs2::frameset frames;
                 if (!pipe.try_wait_for_frames(&frames, 1000)) {
-                    spdlog::error("[Depth] no frame received for 1 second; marking camera failed");
-                    realsense_diagnostics::log_transport(device, "frame_timeout");
+                    ++consecutive_frame_timeouts;
+                    const auto timeout_now = std::chrono::steady_clock::now();
+                    if (last_frame_timeout_log.time_since_epoch().count() == 0 ||
+                        timeout_now - last_frame_timeout_log >= std::chrono::seconds(10)) {
+                        spdlog::error(
+                            "[Depth] no frame received after pipeline start ({} consecutive attempts); "
+                            "marking camera failed",
+                            consecutive_frame_timeouts);
+                        realsense_diagnostics::log_transport(device, "frame_timeout");
+                        last_frame_timeout_log = timeout_now;
+                    }
+                    reset_after_stop = consecutive_frame_timeouts >= 3;
                     {
                         std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
                         robot_->data.depth_valid = false;
@@ -451,8 +479,11 @@ void RealSenseDepthCamera::capture_loop()
                 }
                 consecutive_start_failures = 0;
                 total_start_failures = 0;
+                consecutive_frame_timeouts = 0;
                 no_device_reported = false;
                 last_start_error_log = std::chrono::steady_clock::time_point{};
+                last_frame_timeout_log = std::chrono::steady_clock::time_point{};
+                last_reconnect_log = std::chrono::steady_clock::time_point{};
                 last_hardware_reset = std::chrono::steady_clock::time_point{};
 
                 processed_frame_count_++;
@@ -493,14 +524,39 @@ void RealSenseDepthCamera::capture_loop()
 
         try {
             pipe.stop();
-            spdlog::info("[Depth] pipeline stopped.");
+            if (consecutive_frame_timeouts <= 1 || reset_after_stop) {
+                spdlog::info("[Depth] pipeline stopped.");
+            }
         } catch (const rs2::error& e) {
             spdlog::warn("[Depth] pipeline stop failed: {}", e.what());
+        }
+
+        if (reset_after_stop && running_.load()) {
+            const auto reset_now = std::chrono::steady_clock::now();
+            if (last_hardware_reset.time_since_epoch().count() == 0 ||
+                reset_now - last_hardware_reset >= std::chrono::seconds(10)) {
+                try {
+                    spdlog::warn(
+                        "[Depth] resetting D435i after {} pipelines started without producing frames",
+                        consecutive_frame_timeouts);
+                    device.hardware_reset();
+                    last_hardware_reset = reset_now;
+                    consecutive_frame_timeouts = 0;
+                    std::this_thread::sleep_for(std::chrono::seconds(3));
+                } catch (const rs2::error& reset_error) {
+                    spdlog::warn("[Depth] D435i hardware reset failed: {}", reset_error.what());
+                }
+            }
         }
         } // pipeline + device destroyed here → USB handles released
 
         if (running_.load()) {
-            spdlog::warn("[Depth] reconnecting RealSense pipeline in 1 second");
+            const auto reconnect_now = std::chrono::steady_clock::now();
+            if (last_reconnect_log.time_since_epoch().count() == 0 ||
+                reconnect_now - last_reconnect_log >= std::chrono::seconds(10)) {
+                spdlog::warn("[Depth] reconnecting RealSense pipeline in background");
+                last_reconnect_log = reconnect_now;
+            }
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }

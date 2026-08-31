@@ -133,8 +133,15 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto actor_onnx = onnx_dir / "policy_actor.onnx";
 
     if (std::filesystem::exists(depth_onnx) && std::filesystem::exists(actor_onnx)) {
+#if defined(__aarch64__)
+        constexpr bool encode_on_new_depth = false;
+#else
+        // MuJoCo depth is delivered asynchronously over DDS.
+        constexpr bool encode_on_new_depth = true;
+#endif
         env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
-            depth_onnx.string(), actor_onnx.string(), env->robot);
+            depth_onnx.string(), actor_onnx.string(), env->robot,
+            5, encode_on_new_depth);
     } else {
         env->alg = std::make_unique<isaaclab::OrtRunner>(onnx_dir / "policy.onnx");
     }

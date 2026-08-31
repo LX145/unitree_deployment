@@ -156,11 +156,13 @@ public:
     SplitDepthRunner(const std::string& encoder_path,
                      const std::string& actor_path,
                      std::shared_ptr<Articulation> robot,
-                     int encoder_interval = 5)
+                     int encoder_interval = 5,
+                     bool encode_on_new_depth = false)
         : robot_(std::move(robot))
         , depth_encoder_(std::make_unique<OrtRunner>(encoder_path))
         , actor_(std::make_unique<OrtRunner>(actor_path))
         , encoder_interval_(encoder_interval)
+        , encode_on_new_depth_(encode_on_new_depth)
     {
         // Allocate GRU hidden state: [1, 1, 512]
         hidden_state_.resize(512, 0.0f);
@@ -175,10 +177,23 @@ public:
     /// Main inference entry called at 50 Hz.
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs_map) override
     {
-        // ---- run encoder at fixed interval (matches training depth_update_interval) ----
-        if (step_count_ % encoder_interval_ == 0) {
+        // MuJoCo depth arrives asynchronously over DDS. Encode each received
+        // frame exactly once instead of sampling it on an unrelated 10 Hz phase.
+        std::vector<float> new_depth;
+        bool run_encoder = step_count_ % encoder_interval_ == 0;
+        if (encode_on_new_depth_) {
+            std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
+            run_encoder = robot_->data.depth_valid &&
+                          robot_->data.depth_seq != last_depth_seq_;
+            if (run_encoder) {
+                new_depth = robot_->data.depth_obs;
+                last_depth_seq_ = robot_->data.depth_seq;
+            }
+        }
+
+        if (run_encoder) {
             std::unordered_map<std::string, std::vector<float>> enc_in;
-            enc_in["depth"] = obs_map.at("depth");
+            enc_in["depth"] = encode_on_new_depth_ ? new_depth : obs_map.at("depth");
             enc_in["proprio"] = obs_map.at("proprio");
             enc_in["hidden_in"] = hidden_state_;
 
@@ -204,6 +219,7 @@ public:
         std::fill(hidden_state_.begin(), hidden_state_.end(), 0.0f);
         std::fill(depth_memory_.begin(), depth_memory_.end(), 0.0f);
         step_count_ = 0;
+        last_depth_seq_ = 0;
     }
 
 private:
@@ -214,6 +230,8 @@ private:
     std::vector<float> hidden_state_;   // [1, 1, 512] flattened
     std::vector<float> depth_memory_;   // [1, 512]
     int encoder_interval_ = 5;          // matches training depth_update_interval
+    bool encode_on_new_depth_ = false;  // enabled for asynchronous MuJoCo DDS input
+    uint64_t last_depth_seq_ = 0;
     int step_count_ = 0;
 };
 };
