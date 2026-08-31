@@ -5,6 +5,8 @@
 
 #include <eigen3/Eigen/Dense>
 #include <yaml-cpp/yaml.h>
+#include <chrono>
+#include <spdlog/spdlog.h>
 #include "isaaclab/envs/manager_based_rl_env.h"
 #include "isaaclab/manager/action_manager.h"
 
@@ -53,8 +55,41 @@ public:
         }
         if(!_clip.empty())
         {
+            int clipped_count = 0;
+            int first_clipped_index = -1;
+            float first_value = 0.0f;
+            float first_lower = 0.0f;
+            float first_upper = 0.0f;
             for(int i(0); i<_action_dim; ++i) {
-                _processed_actions[i] = std::clamp(_processed_actions[i], _clip[i][0], _clip[i][1]);
+                const float lower = _clip[i][0];
+                const float upper = _clip[i][1];
+                const float value = _processed_actions[i];
+                if (value < lower || value > upper) {
+                    if (first_clipped_index < 0) {
+                        first_clipped_index = i;
+                        first_value = value;
+                        first_lower = lower;
+                        first_upper = upper;
+                    }
+                    ++clipped_count;
+                }
+                _processed_actions[i] = std::clamp(value, lower, upper);
+            }
+
+            // Action processing runs in the policy thread. Keep this warning
+            // rate-limited so an abnormal policy output cannot flood logs.
+            if (clipped_count > 0) {
+                static auto last_clip_warning = std::chrono::steady_clock::time_point{};
+                const auto now = std::chrono::steady_clock::now();
+                if (last_clip_warning.time_since_epoch().count() == 0 ||
+                    now - last_clip_warning >= std::chrono::seconds(1)) {
+                    spdlog::warn(
+                        "[Action] clip triggered: {} action(s), first index={} "
+                        "value={:.4f}, limit=[{:.4f}, {:.4f}]",
+                        clipped_count, first_clipped_index, first_value,
+                        first_lower, first_upper);
+                    last_clip_warning = now;
+                }
             }
         }
     }
