@@ -10,6 +10,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <atomic>
 
 class DepthProvider;  // forward declaration
 
@@ -30,7 +31,8 @@ private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
 
     std::thread policy_thread;
-    bool policy_thread_running = false;
+    std::atomic<bool> policy_thread_running{false};
+    std::atomic<bool> policy_action_ready_{false};
 
     FILE* log_file = nullptr;       // 文件指针
     char write_buffer[1024 * 1024]; // 1MB 的写缓冲区，避免频繁触发磁盘 I/O

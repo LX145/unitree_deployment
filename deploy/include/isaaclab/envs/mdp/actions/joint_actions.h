@@ -42,12 +42,32 @@ public:
     {
         // TODO: modify action by joint_ids
         _raw_actions = actions;
+        int clipped_count = 0;
+        int first_clipped_index = -1;
+        float first_value = 0.0f;
+        float first_lower = 0.0f;
+        float first_upper = 0.0f;
         for(int i(0); i<_action_dim; ++i)
         {
+            float action = _raw_actions[i];
+            if(!_clip.empty()) {
+                const float lower = _clip[i][0];
+                const float upper = _clip[i][1];
+                if (action < lower || action > upper) {
+                    if (first_clipped_index < 0) {
+                        first_clipped_index = i;
+                        first_value = action;
+                        first_lower = lower;
+                        first_upper = upper;
+                    }
+                    ++clipped_count;
+                }
+                action = std::clamp(action, lower, upper);
+            }
             if(!_scale.empty()) {
-                _processed_actions[i] = _raw_actions[i] * _scale[i];
+                _processed_actions[i] = action * _scale[i];
             } else {
-                _processed_actions[i] = _raw_actions[i];
+                _processed_actions[i] = action;
             }
             if(!_offset.empty()) {
                 _processed_actions[i] += _offset[i];
@@ -55,27 +75,6 @@ public:
         }
         if(!_clip.empty())
         {
-            int clipped_count = 0;
-            int first_clipped_index = -1;
-            float first_value = 0.0f;
-            float first_lower = 0.0f;
-            float first_upper = 0.0f;
-            for(int i(0); i<_action_dim; ++i) {
-                const float lower = _clip[i][0];
-                const float upper = _clip[i][1];
-                const float value = _processed_actions[i];
-                if (value < lower || value > upper) {
-                    if (first_clipped_index < 0) {
-                        first_clipped_index = i;
-                        first_value = value;
-                        first_lower = lower;
-                        first_upper = upper;
-                    }
-                    ++clipped_count;
-                }
-                _processed_actions[i] = std::clamp(value, lower, upper);
-            }
-
             // Action processing runs in the policy thread. Keep this warning
             // rate-limited so an abnormal policy output cannot flood logs.
             if (clipped_count > 0) {
@@ -113,6 +112,10 @@ public:
     void reset()
     {
         _raw_actions.assign(_action_dim, 0.0f);
+        _processed_actions.assign(_action_dim, 0.0f);
+        if(!_offset.empty()) {
+            _processed_actions = _offset;
+        }
     }
 
 protected:

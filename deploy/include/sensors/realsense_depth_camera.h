@@ -47,7 +47,12 @@ public:
         int out_height = 58;
         int history = 1;
         float update_hz = 10.0f;
-        float target_fx = 0.0f;  // > 0 enables horizontal crop to this output focal length
+        // Intrinsics expected by the policy after crop/resize. These are
+        // derived from deploy.yaml's exported camera matrix and observation crop.
+        float target_fx = 0.0f;
+        float target_fy = 0.0f;
+        float target_cx = -1.0f;
+        float target_cy = -1.0f;
 
         // ---- depth normalization ----
         float min_depth = 0.0f;
@@ -100,13 +105,14 @@ private:
     /// The background loop: capture → preprocess → write to robot->data.
     void capture_loop();
 
-    /// Process a single raw depth frame (z16) into a normalized, center-cropped and resized
+    /// Process a single raw depth frame (z16) into a normalized, cropped and resized
     /// flat vector of length out_width * out_height.  Returned values are
     /// in [output_min, output_max].
     std::vector<float> process_depth(const uint16_t* raw,
                                      int raw_w, int raw_h,
                                      float depth_scale,
-                                     int crop_x, int crop_width);
+                                     int crop_x, int crop_y,
+                                     int crop_width, int crop_height);
 
     /// Save the normalized depth image to disk (PGM text format + raw binary).
     void save_debug_frame(const std::vector<float>& frame);

@@ -30,21 +30,29 @@ struct CropRect {
     int height;
 };
 
-CropRect horizontal_crop_for_target_fx(int raw_w, int raw_h, int out_w,
-                                       float raw_fx, float raw_cx,
-                                       float target_fx)
+CropRect crop_for_target_intrinsics(int raw_w, int raw_h, int out_w, int out_h,
+                                    float raw_fx, float raw_fy,
+                                    float raw_cx, float raw_cy,
+                                    float target_fx, float target_fy,
+                                    float target_cx, float target_cy)
 {
     CropRect crop{0, 0, raw_w, raw_h};
-    if (target_fx <= 0.0f) return crop;
-
-    crop.width = std::clamp(
-        static_cast<int>(std::lround(raw_fx * out_w / target_fx)),
-        1, raw_w);
-    const float scale_x = static_cast<float>(out_w) / crop.width;
-    const float target_cx = (out_w - 1.0f) * 0.5f;
-    crop.x = std::clamp(
-        static_cast<int>(std::lround(raw_cx - target_cx / scale_x)),
-        0, raw_w - crop.width);
+    if (target_fx > 0.0f) {
+        crop.width = std::clamp(
+            static_cast<int>(std::lround(raw_fx * out_w / target_fx)), 1, raw_w);
+        const float scale_x = static_cast<float>(out_w) / crop.width;
+        crop.x = std::clamp(
+            static_cast<int>(std::lround(raw_cx - target_cx / scale_x)),
+            0, raw_w - crop.width);
+    }
+    if (target_fy > 0.0f) {
+        crop.height = std::clamp(
+            static_cast<int>(std::lround(raw_fy * out_h / target_fy)), 1, raw_h);
+        const float scale_y = static_cast<float>(out_h) / crop.height;
+        crop.y = std::clamp(
+            static_cast<int>(std::lround(raw_cy - target_cy / scale_y)),
+            0, raw_h - crop.height);
+    }
     return crop;
 }
 
@@ -80,7 +88,19 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.out_height = node["height"].as<int>(58);
     c.history    = node["history"].as<int>(1);
     c.update_hz  = node["update_hz"].as<float>(10.0f);
-    c.target_fx  = node["target_fx"].as<float>(0.0f);
+    c.target_fx  = node["fx"].as<float>(node["target_fx"].as<float>(0.0f));
+    c.target_fy  = node["fy"].as<float>(0.0f);
+    c.target_cx  = node["cx"].as<float>((c.out_width - 1.0f) * 0.5f);
+    c.target_cy  = node["cy"].as<float>((c.out_height - 1.0f) * 0.5f);
+    // The exported matrix describes the native ray grid. Convert its principal
+    // point to policy-image coordinates after the observation-side crop.
+    if (node["real_crop"] && node["render_width"] && node["render_height"] &&
+        (node["render_width"].as<int>() != c.out_width ||
+         node["render_height"].as<int>() != c.out_height)) {
+        const auto crop = node["real_crop"];
+        c.target_cx -= crop[2].as<float>();  // left
+        c.target_cy -= crop[0].as<float>();  // up
+    }
 
     // normalization
     c.min_depth  = node["min_depth"].as<float>(0.0f);
@@ -159,7 +179,8 @@ void RealSenseDepthCamera::stop()
 std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
                                                         int raw_w, int raw_h,
                                                         float depth_scale,
-                                                        int crop_x, int crop_width)
+                                                        int crop_x, int crop_y,
+                                                        int crop_width, int crop_height)
 {
     const int w = cfg_.out_width;
     const int h = cfg_.out_height;
@@ -168,7 +189,7 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
     // Match the training/deployment contract: crop the raw image and resize
     // with nearest-neighbour sampling before applying the image blur.
     for (int y = 0; y < h; ++y) {
-        const int src_y = y * raw_h / h;
+        const int src_y = crop_y + y * crop_height / h;
         const uint16_t* row = raw + src_y * raw_w;
         for (int x = 0; x < w; ++x) {
             const int src_x = crop_x + x * crop_width / w;
@@ -339,9 +360,11 @@ void RealSenseDepthCamera::capture_loop()
             const auto video_profile =
                 profile.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
             const auto intrinsics = video_profile.get_intrinsics();
-            crop = horizontal_crop_for_target_fx(
-                intrinsics.width, intrinsics.height, cfg_.out_width,
-                intrinsics.fx, intrinsics.ppx, cfg_.target_fx);
+            crop = crop_for_target_intrinsics(
+                intrinsics.width, intrinsics.height,
+                cfg_.out_width, cfg_.out_height,
+                intrinsics.fx, intrinsics.fy, intrinsics.ppx, intrinsics.ppy,
+                cfg_.target_fx, cfg_.target_fy, cfg_.target_cx, cfg_.target_cy);
             const float scale_x = static_cast<float>(cfg_.out_width) / crop.width;
             const float scale_y = static_cast<float>(cfg_.out_height) / crop.height;
             if (consecutive_frame_timeouts == 0) {
@@ -474,7 +497,8 @@ void RealSenseDepthCamera::capture_loop()
 
                 // ---- preprocess ----
                 auto frame = process_depth(
-                    raw, raw_w, raw_h, depth_scale, crop.x, crop.width);
+                    raw, raw_w, raw_h, depth_scale,
+                    crop.x, crop.y, crop.width, crop.height);
 
 #ifdef ENABLE_DEPTH_STATS
                 const double stats_now = now_sec();
