@@ -67,40 +67,40 @@ observations:
       history_length: 1
   depth:
     depth_image:
-      params:
-        width: 72
-        height: 48
+      params: {width: 32, height: 36}
       scale: [1.0]
       clip: null
       history_length: 1
-
 depth_camera:
   enable: true
   monitor_only: false
   raw_width: 848
   raw_height: 480
   raw_fps: 30
-  width: 72
-  height: 48
+  width: 32
+  height: 36
   min_depth: 0.0
   max_depth: 2.0
   output_min: -0.5
   output_max: 0.5
   update_hz: 10.0
-  # The C++ path uses nearest-neighbour resize after this ROI crop.
   resize_mode: nearest
-  target_fx: 37.9492721558
+  target_fx: 32.27484130859375
   replace_invalid_with_max: true
   blur_kernel_size: 3
   blur_sigma: 1.0
-  # Training-camera calibration and ROI, retained for diagnostics/documentation.
-  focal_length: 24.0
-  horizontal_aperture: 45.53447014497334
-  vertical_aperture: 27.117302603671483
-  fx: 37.94927215576172
+  focal_length: 1.0
+  horizontal_aperture: 1.9829686965171496
+  vertical_aperture: 0.8474157063647338
+  fx: 32.27484130859375
   fy: 42.48210144042969
   cx: 35.58363342285156
   cy: 23.43589973449707
   real_input_width: 848
   real_input_height: 480
-  real_crop: [21, 0, 806, 480]
+  real_crop: [0, 0, 16, 16]
+  render_width: 64
+  render_height: 36
+  filter_chain: true
+  filter_chain_temporal: false
+  history: 1

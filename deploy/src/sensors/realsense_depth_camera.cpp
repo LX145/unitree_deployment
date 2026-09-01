@@ -89,6 +89,8 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.output_max = node["output_max"].as<float>(0.5f);
 
     // processing
+    c.filter_chain = node["filter_chain"].as<bool>(true);
+    c.filter_chain_temporal = node["filter_chain_temporal"].as<bool>(false);
     c.replace_invalid_with_max = node["replace_invalid_with_max"].as<bool>(true);
     c.blur_kernel_size = node["blur_kernel_size"].as<int>(3);
     c.blur_sigma = node["blur_sigma"].as<float>(1.0f);
@@ -354,8 +356,7 @@ void RealSenseDepthCamera::capture_loop()
                     (intrinsics.ppx - crop.x) * scale_x,
                     (intrinsics.ppy - crop.y) * scale_y);
             }
-        } catch (const rs2::error& e) {
-            ++consecutive_start_failures;
+        } catch (const rs2::error& e) {            ++consecutive_start_failures;
             ++total_start_failures;
             const auto error_now = std::chrono::steady_clock::now();
             if (last_start_error_log.time_since_epoch().count() == 0 ||
@@ -394,6 +395,26 @@ void RealSenseDepthCamera::capture_loop()
         std::deque<std::vector<float>> history;
         bool reset_after_stop = false;
 
+        // InstinctLab-style RealSense SDK filter chain, mirroring
+        // instinct_onboard/scripts/depth_latent_publisher.py:
+        //   depth -> disparity -> hole-fill -> spatial -> temporal -> depth.
+        // Filtering in disparity space is what RealSense recommends; the
+        // hole-filling/spatial/temporal stages inpaint gaps, denoise and
+        // stabilize the stream before the policy sees it. Filters keep
+        // internal state, so they must live for the whole pipeline session
+        // and be applied on the capture thread.
+        rs2::disparity_transform depth_to_disparity(true);
+        rs2::disparity_transform disparity_to_depth(false);
+        rs2::hole_filling_filter hole_filling(1);  // 1: farthest from around
+        rs2::spatial_filter spatial;
+        spatial.set_option(RS2_OPTION_FILTER_MAGNITUDE, 5.0f);
+        spatial.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.75f);
+        spatial.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 1.0f);
+        spatial.set_option(RS2_OPTION_HOLES_FILL, 4.0f);
+        rs2::temporal_filter temporal;
+        temporal.set_option(RS2_OPTION_FILTER_SMOOTH_ALPHA, 0.6f);
+        temporal.set_option(RS2_OPTION_FILTER_SMOOTH_DELTA, 20.0f);
+
         // timing for rate control
         using clock = std::chrono::steady_clock;
         const auto desired_period =
@@ -430,6 +451,21 @@ void RealSenseDepthCamera::capture_loop()
                 if (!depth) {
                     spdlog::warn("[Depth] no depth frame in frameset");
                     continue;
+                }
+
+                // Apply the InstinctLab-style filter chain (in-place on the frame).
+                // Temporal smoothing is opt-in: it adds ~1 frame latency, which
+                // only matches policies trained with depth delay randomization.
+                if (cfg_.filter_chain) {
+                    rs2::frame f = depth;
+                    f = depth_to_disparity.process(f);
+                    f = hole_filling.process(f);
+                    f = spatial.process(f);
+                    if (cfg_.filter_chain_temporal) {
+                        f = temporal.process(f);
+                    }
+                    f = disparity_to_depth.process(f);
+                    depth = f.as<rs2::depth_frame>();
                 }
 
                 const auto* raw = reinterpret_cast<const uint16_t*>(depth.get_data());

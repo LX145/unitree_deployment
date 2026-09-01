@@ -112,6 +112,16 @@ if(HAS_REALSENSE)
         target_compile_definitions(test_depth_camera PRIVATE HAS_OPENCV)
     endif()
 
+    # Depth pipeline viewer: raw vs filtered vs policy input (OpenCV required).
+    if(OpenCV_FOUND)
+        add_executable(test_depth_image test_depth_image.cpp
+                       ${PROJECT_SOURCE_DIR}/../../src/sensors/realsense_depth_processing.cpp)
+        target_link_libraries(test_depth_image ${COMMON_LIBS} ${realsense2_LIBRARIES} ${OpenCV_LIBS})
+        target_include_directories(test_depth_image PRIVATE ${OpenCV_INCLUDE_DIRS})
+    else()
+        message(STATUS "OpenCV NOT found: test_depth_image disabled")
+    endif()
+
     # Read-only shadow inference: LowState DDS + RealSense + depth policy.
     # This target intentionally has no LowCmd publisher/control path.
     add_executable(test_depth_action test_depth_action.cpp)

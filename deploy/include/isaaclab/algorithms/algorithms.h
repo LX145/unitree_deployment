@@ -177,13 +177,19 @@ public:
     /// Main inference entry called at 50 Hz.
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs_map) override
     {
-        // MuJoCo depth arrives asynchronously over DDS. Encode each received
-        // frame exactly once instead of sampling it on an unrelated 10 Hz phase.
+        // Depth frames arrive asynchronously (DDS or camera thread). The GRU
+        // encoder must run at the TRAINING cadence (every encoder_interval_
+        // control steps = 100 ms), regardless of the depth stream's update_hz:
+        // a faster stream (e.g. 50 Hz) must NOT make the encoder run 5x more
+        // often than training, or the hidden-state dynamics diverge.
         std::vector<float> new_depth;
         bool run_encoder = step_count_ % encoder_interval_ == 0;
         if (encode_on_new_depth_) {
+            // Frame-driven (use a fresh frame when available), but still
+            // throttled to encoder_interval_ control steps.
             std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
-            run_encoder = robot_->data.depth_valid &&
+            run_encoder = run_encoder &&
+                          robot_->data.depth_valid &&
                           robot_->data.depth_seq != last_depth_seq_;
             if (run_encoder) {
                 new_depth = robot_->data.depth_obs;

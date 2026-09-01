@@ -56,6 +56,13 @@ public:
         float output_max = 0.5f;
 
         // ---- processing ----
+        bool filter_chain = true;  // InstinctLab-style RealSense SDK filter chain:
+                                   // depth->disparity->hole-fill->spatial->temporal->depth
+        bool filter_chain_temporal = false;  // temporal smoothing adds ~1 frame
+                                             // latency; enable only if training
+                                             // randomizes depth-frame delay (as
+                                             // InstinctLab does with
+                                             // delayed_frame_ranges=(0,1))
         bool replace_invalid_with_max = true;
         int blur_kernel_size = 3;  // odd; 1 disables blur
         float blur_sigma = 1.0f;
