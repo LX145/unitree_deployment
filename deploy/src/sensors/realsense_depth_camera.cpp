@@ -87,7 +87,7 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.out_width  = node["width"].as<int>(87);
     c.out_height = node["height"].as<int>(58);
     c.history    = node["history"].as<int>(1);
-    c.update_hz  = node["update_hz"].as<float>(10.0f);
+    c.update_hz  = node["update_hz"].as<float>(50.0f);
     c.target_fx  = node["fx"].as<float>(node["target_fx"].as<float>(0.0f));
     c.target_fy  = node["fy"].as<float>(0.0f);
     c.target_cx  = node["cx"].as<float>((c.out_width - 1.0f) * 0.5f);
@@ -105,6 +105,7 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     // normalization
     c.min_depth  = node["min_depth"].as<float>(0.0f);
     c.max_depth  = node["max_depth"].as<float>(2.0f);
+    c.invalid_depth_threshold = node["invalid_depth_threshold"].as<float>(0.3f);
     c.output_min = node["output_min"].as<float>(-0.5f);
     c.output_max = node["output_max"].as<float>(0.5f);
 
@@ -112,7 +113,8 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.filter_chain = node["filter_chain"].as<bool>(true);
     c.filter_chain_temporal = node["filter_chain_temporal"].as<bool>(false);
     c.replace_invalid_with_max = node["replace_invalid_with_max"].as<bool>(true);
-    c.blur_kernel_size = node["blur_kernel_size"].as<int>(3);
+    c.resize_mode = node["resize_mode"].as<std::string>("bilinear");
+    c.blur_kernel_size = node["blur_kernel_size"].as<int>(1);
     c.blur_sigma = node["blur_sigma"].as<float>(1.0f);
 
     // debug
@@ -157,9 +159,9 @@ void RealSenseDepthCamera::start()
     running_.store(true);
     thread_ = std::thread(&RealSenseDepthCamera::capture_loop, this);
     spdlog::info(
-        "[Depth] camera thread started (update_hz={}, out={}x{}, history={}, resize=nearest, blur={}x{}, sigma={})",
+        "[Depth] camera thread started (update_hz={}, out={}x{}, history={}, resize={}, blur={}x{}, sigma={})",
         cfg_.update_hz, cfg_.out_width, cfg_.out_height, cfg_.history,
-        cfg_.blur_kernel_size, cfg_.blur_kernel_size, cfg_.blur_sigma);
+        cfg_.resize_mode, cfg_.blur_kernel_size, cfg_.blur_kernel_size, cfg_.blur_sigma);
 }
 
 void RealSenseDepthCamera::stop()
@@ -186,19 +188,39 @@ std::vector<float> RealSenseDepthCamera::process_depth(const uint16_t* raw,
     const int h = cfg_.out_height;
     std::vector<float> metric_depth(w * h);
 
-    // Match the training/deployment contract: crop the raw image and resize
-    // with nearest-neighbour sampling before applying the image blur.
-    for (int y = 0; y < h; ++y) {
-        const int src_y = crop_y + y * crop_height / h;
-        const uint16_t* row = raw + src_y * raw_w;
-        for (int x = 0; x < w; ++x) {
-            const int src_x = crop_x + x * crop_width / w;
-            float d = static_cast<float>(row[src_x]) * depth_scale;
+    const auto sample_metric = [&](int x, int y) {
+        const uint16_t value = raw[y * raw_w + x];
+        float depth = static_cast<float>(value) * depth_scale;
+        if (depth < cfg_.invalid_depth_threshold ||
+            (depth <= 0.0f && cfg_.replace_invalid_with_max)) {
+            depth = cfg_.max_depth;
+        }
+        return std::clamp(depth, cfg_.min_depth, cfg_.max_depth);
+    };
 
-            if (d <= 0.0f && cfg_.replace_invalid_with_max) {
-                d = cfg_.max_depth;
+    // Match training: crop the native D435i image to the policy intrinsics,
+    // then resize with bilinear pixel-center sampling.
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            if (cfg_.resize_mode == "bilinear") {
+                const float src_x = crop_x + (x + 0.5f) * crop_width / w - 0.5f;
+                const float src_y = crop_y + (y + 0.5f) * crop_height / h - 0.5f;
+                const int x0 = std::clamp(static_cast<int>(std::floor(src_x)), 0, raw_w - 1);
+                const int y0 = std::clamp(static_cast<int>(std::floor(src_y)), 0, raw_h - 1);
+                const int x1 = std::min(x0 + 1, raw_w - 1);
+                const int y1 = std::min(y0 + 1, raw_h - 1);
+                const float wx = src_x - x0;
+                const float wy = src_y - y0;
+                const float top = sample_metric(x0, y0) * (1.0f - wx) +
+                                  sample_metric(x1, y0) * wx;
+                const float bottom = sample_metric(x0, y1) * (1.0f - wx) +
+                                     sample_metric(x1, y1) * wx;
+                metric_depth[y * w + x] = top * (1.0f - wy) + bottom * wy;
+            } else {
+                const int src_x = crop_x + x * crop_width / w;
+                const int src_y = crop_y + y * crop_height / h;
+                metric_depth[y * w + x] = sample_metric(src_x, src_y);
             }
-            metric_depth[y * w + x] = std::clamp(d, cfg_.min_depth, cfg_.max_depth);
         }
     }
 

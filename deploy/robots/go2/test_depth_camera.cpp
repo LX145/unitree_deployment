@@ -141,14 +141,25 @@ int main()
         spdlog::info("No test_depth_cfg.yaml, using defaults");
     }
 
+    // Raw-hole inspection mode: preserve the D435i Z16 image without SDK
+    // hole filling or Gaussian blur. Only raw value=0 pixels are converted to
+    // max depth, matching the policy's no-return convention for visualization.
+    cfg.filter_chain = false;
+    cfg.invalid_depth_threshold = 0.0f;
+    cfg.replace_invalid_with_max = true;
+    cfg.blur_kernel_size = 1;
+    spdlog::info("Raw-hole mode: value=0 -> {:.1f}m; filter chain and blur disabled",
+                 cfg.max_depth);
+
     auto robot = std::make_shared<isaaclab::Articulation>();
+
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
 
     RealSenseDepthCamera cam(cfg, robot);
     cam.start();
 
     spdlog::info("Depth camera starting; waiting for first valid frame...");
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
 
 #ifdef HAS_OPENCV
     bool window_created = false;
@@ -184,8 +195,11 @@ int main()
             show_depth_opencv(frame, cfg.out_width, cfg.out_height,
                               frame_count);
 
-            int key = cv::waitKey(50);
-            if (key == 27 || key == 'q' || key == 'Q') {  // ESC or Q
+            const int key = cv::waitKey(50);
+            const int key_code = key < 0 ? key : key & 0xff;
+            if (key_code == 3 || key_code == 27 || key_code == 'q' || key_code == 'Q') {
+                // Ctrl+C is delivered as ASCII ETX (3) when the OpenCV window,
+                // rather than the launching terminal, owns keyboard focus.
                 spdlog::info("Key pressed, exiting");
                 g_stop = 1;
             }

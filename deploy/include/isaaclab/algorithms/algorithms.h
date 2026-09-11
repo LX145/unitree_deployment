@@ -144,8 +144,7 @@ private:
 // ===================================================================
 //
 // Loads policy_depth.onnx (encoder) and policy_actor.onnx (actor).
-// Encoder runs at ~10 Hz when new depth frames arrive; actor runs
-// every policy tick at 50 Hz.
+// Encoder/GRU and actor both run every policy tick at 50 Hz.
 //
 // GRU hidden_state [1,1,512] and depth_memory [1,512] are maintained
 // internally and zeroed on reset().
@@ -156,7 +155,7 @@ public:
     SplitDepthRunner(const std::string& encoder_path,
                      const std::string& actor_path,
                      std::shared_ptr<Articulation> robot,
-                     int encoder_interval = 5,
+                     int encoder_interval = 1,
                      bool encode_on_new_depth = false)
         : robot_(std::move(robot))
         , depth_encoder_(std::make_unique<OrtRunner>(encoder_path))
@@ -177,16 +176,14 @@ public:
     /// Main inference entry called at 50 Hz.
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs_map) override
     {
-        // Depth frames arrive asynchronously (DDS or camera thread). The GRU
-        // encoder must run at the TRAINING cadence (every encoder_interval_
-        // control steps = 100 ms), regardless of the depth stream's update_hz:
-        // a faster stream (e.g. 50 Hz) must NOT make the encoder run 5x more
-        // often than training, or the hidden-state dynamics diverge.
+        // Run the encoder/GRU at the training cadence. The current depth
+        // student uses encoder_interval_=1, so it updates at every 50 Hz
+        // policy step using the latest available depth frame.
         std::vector<float> new_depth;
         bool run_encoder = step_count_ % encoder_interval_ == 0;
         if (encode_on_new_depth_) {
-            // Frame-driven (use a fresh frame when available), but still
-            // throttled to encoder_interval_ control steps.
+            // Optional frame-driven mode for policies trained at the incoming
+            // frame cadence.
             std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
             run_encoder = run_encoder &&
                           robot_->data.depth_valid &&
@@ -235,7 +232,7 @@ private:
 
     std::vector<float> hidden_state_;   // [1, 1, 512] flattened
     std::vector<float> depth_memory_;   // [1, 512]
-    int encoder_interval_ = 5;          // matches training depth_update_interval
+    int encoder_interval_ = 1;          // matches training depth_update_interval
     bool encode_on_new_depth_ = false;  // enabled for asynchronous MuJoCo DDS input
     uint64_t last_depth_seq_ = 0;
     int step_count_ = 0;

@@ -123,8 +123,9 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto cfg = param::config["FSM"][state_string];
     auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
 
+    const auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
-        YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
+        deploy_cfg,
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
     // Auto-detect split depth ONNX vs single ONNX
@@ -133,22 +134,17 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto actor_onnx = onnx_dir / "policy_actor.onnx";
 
     if (std::filesystem::exists(depth_onnx) && std::filesystem::exists(actor_onnx)) {
-#if defined(__aarch64__)
-        constexpr bool encode_on_new_depth = false;
-#else
-        // MuJoCo depth is delivered asynchronously over DDS.
-        constexpr bool encode_on_new_depth = true;
-#endif
+        const int depth_update_interval =
+            deploy_cfg["depth_camera"]["depth_update_interval"].as<int>(1);
         env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
             depth_onnx.string(), actor_onnx.string(), env->robot,
-            5, encode_on_new_depth);
+            depth_update_interval, false);
     } else {
         env->alg = std::make_unique<isaaclab::OrtRunner>(onnx_dir / "policy.onnx");
     }
 
     // ---- depth camera/provider (runtime selection) ----
     {
-        auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
         if (deploy_cfg["depth_camera"] && deploy_cfg["depth_camera"]["enable"].as<bool>(false)) {
             auto dc = deploy_cfg["depth_camera"];
 #if defined(__aarch64__)

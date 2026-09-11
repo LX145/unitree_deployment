@@ -210,8 +210,11 @@ int main(int argc, char** argv)
 
         auto robot = std::make_shared<unitree::BaseArticulation<Go2LowState::SharedPtr>>(lowstate);
         auto env = std::make_unique<isaaclab::ManagerBasedRLEnv>(deploy_cfg, robot);
+        const int depth_update_interval =
+            deploy_cfg["depth_camera"]["depth_update_interval"].as<int>(1);
         env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
-            depth_onnx.string(), actor_onnx.string(), robot, 5);
+            depth_onnx.string(), actor_onnx.string(), robot,
+            depth_update_interval, false);
 
         auto camera_cfg = RealSenseDepthCamera::Config::from_yaml(deploy_cfg["depth_camera"]);
         camera_cfg.enable = true;

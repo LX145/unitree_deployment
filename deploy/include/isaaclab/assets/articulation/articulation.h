@@ -48,7 +48,7 @@ struct ArticulationData
 
     // ---- depth camera buffer (mutex-protected) ----
     // Preprocessed, normalized, history-stacked, flattened policy input.
-    // Written by RealSenseDepthCamera thread at ~10 Hz.
+    // Written by RealSenseDepthCamera or DDS thread at ~50 Hz.
     // Read by observation pipeline at ~50 Hz.
     std::vector<float> depth_obs;
     mutable std::mutex depth_mtx;

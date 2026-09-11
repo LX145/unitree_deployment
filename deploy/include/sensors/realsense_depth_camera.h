@@ -46,7 +46,7 @@ public:
         int out_width = 87;
         int out_height = 58;
         int history = 1;
-        float update_hz = 10.0f;
+        float update_hz = 50.0f;
         // Intrinsics expected by the policy after crop/resize. These are
         // derived from deploy.yaml's exported camera matrix and observation crop.
         float target_fx = 0.0f;
@@ -57,6 +57,7 @@ public:
         // ---- depth normalization ----
         float min_depth = 0.0f;
         float max_depth = 2.0f;
+        float invalid_depth_threshold = 0.3f;
         float output_min = -0.5f;
         float output_max = 0.5f;
 
@@ -69,7 +70,8 @@ public:
                                              // InstinctLab does with
                                              // delayed_frame_ranges=(0,1))
         bool replace_invalid_with_max = true;
-        int blur_kernel_size = 3;  // odd; 1 disables blur
+        std::string resize_mode = "bilinear";
+        int blur_kernel_size = 1;  // odd; 1 disables blur
         float blur_sigma = 1.0f;
 
         // ---- debug ----

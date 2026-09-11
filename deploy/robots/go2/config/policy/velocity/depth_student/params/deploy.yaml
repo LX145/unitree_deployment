@@ -17,18 +17,18 @@ commands:
 actions:
   JointPositionAction:
     clip:
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
-    - [-5.0, 5.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
+    - [-20.0, 20.0]
     joint_names: [.*]
     scale: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]
     offset: [0.0, -0.0, 0.0, -0.0, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
@@ -76,18 +76,20 @@ depth_camera:
   monitor_only: false
   raw_width: 848
   raw_height: 480
-  raw_fps: 30
+  raw_fps: 60
   width: 32
   height: 36
   min_depth: 0.0
   max_depth: 2.0
+  invalid_depth_threshold: 0.19
   output_min: -0.5
   output_max: 0.5
-  update_hz: 10.0
-  resize_mode: nearest
+  update_hz: 50.0
+  depth_update_interval: 1
+  resize_mode: bilinear
   target_fx: 32.27484130859375
   replace_invalid_with_max: true
-  blur_kernel_size: 3
+  blur_kernel_size: 1
   blur_sigma: 1.0
   focal_length: 1.0
   horizontal_aperture: 1.9829686965171496
@@ -101,6 +103,6 @@ depth_camera:
   real_crop: [0, 0, 16, 16]
   render_width: 64
   render_height: 36
-  filter_chain: true
+  filter_chain: false
   filter_chain_temporal: false
   history: 1
