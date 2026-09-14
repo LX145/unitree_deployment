@@ -79,6 +79,9 @@ public:
         bool save_debug_image = false;
         float debug_save_interval_s = 2.0f;
         std::string debug_save_dir = "/tmp/depth_debug";
+        bool publish_debug_dds = false;
+        float debug_publish_hz = 10.0f;
+        std::string debug_topic = "rt/depth_image_debug";
 
         /// Load config from a YAML node (typically deploy.yaml's "depth_camera" section).
         static Config from_yaml(const YAML::Node& node);

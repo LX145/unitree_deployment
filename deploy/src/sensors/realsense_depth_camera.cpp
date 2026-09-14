@@ -7,6 +7,8 @@
 #include "isaaclab/assets/articulation/articulation.h"
 
 #include <librealsense2/rs.hpp>
+#include <unitree/dds_wrapper/common/Publisher.h>
+#include <unitree/idl/go2/HeightMap_.hpp>
 #include <spdlog/spdlog.h>
 #include <cmath>
 #include <cstring>
@@ -123,6 +125,10 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
     c.debug_save_interval_s  = node["debug_save_interval_s"].as<float>(2.0f);
     if (node["debug_save_dir"])
         c.debug_save_dir = node["debug_save_dir"].as<std::string>();
+    c.publish_debug_dds = node["publish_debug_dds"].as<bool>(false);
+    c.debug_publish_hz = node["debug_publish_hz"].as<float>(10.0f);
+    if (node["debug_topic"])
+        c.debug_topic = node["debug_topic"].as<std::string>();
 
     return c;
 }
@@ -328,6 +334,24 @@ void RealSenseDepthCamera::save_debug_frame(const std::vector<float>& frame)
 void RealSenseDepthCamera::capture_loop()
 {
     spdlog::info("[Depth] capture_loop starting...");
+
+    using DebugDepthMsg = unitree_go::msg::dds_::HeightMap_;
+    std::shared_ptr<unitree::robot::PublisherBase<DebugDepthMsg>> debug_publisher;
+    auto next_debug_publish = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::duration debug_publish_period{};
+    if (cfg_.publish_debug_dds) {
+        if (cfg_.debug_publish_hz <= 0.0f) {
+            spdlog::error("[Depth Debug] debug_publish_hz must be positive; DDS preview disabled");
+        } else {
+            debug_publisher =
+                std::make_shared<unitree::robot::PublisherBase<DebugDepthMsg>>(cfg_.debug_topic);
+            debug_publish_period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(1.0 / cfg_.debug_publish_hz));
+            spdlog::info(
+                "[Depth Debug] publishing policy input on {} at {:.1f} Hz ({}x{})",
+                cfg_.debug_topic, cfg_.debug_publish_hz, cfg_.out_width, cfg_.out_height);
+        }
+    }
 
     // Keep a supervisor alive across USB disconnects. Pipeline teardown and
     // reconnection happen only on this worker thread, never on the FSM thread.
@@ -555,6 +579,22 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_seq++;
                 }
                 ready_.store(true);
+
+                // Publish a read-only preview of the exact latest frame consumed by
+                // the policy. RealSense remains exclusively owned by this process;
+                // the viewer only subscribes to this DDS side channel.
+                const auto debug_now = clock::now();
+                if (debug_publisher && debug_now >= next_debug_publish) {
+                    DebugDepthMsg message;
+                    message.stamp(now_sec());
+                    message.frame_id("depth_camera_policy_input");
+                    message.width(static_cast<uint32_t>(cfg_.out_width));
+                    message.height(static_cast<uint32_t>(cfg_.out_height));
+                    message.data(history.back());
+                    debug_publisher->Write(message, 0);
+                    next_debug_publish = debug_now + debug_publish_period;
+                }
+
                 const bool recovered = failed_.exchange(false);
                 if (recovered) {
                     spdlog::info("[Depth] RealSense stream recovered; valid frames resumed");

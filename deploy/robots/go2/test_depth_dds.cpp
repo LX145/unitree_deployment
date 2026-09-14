@@ -15,6 +15,7 @@
 #include <csignal>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <numeric>
 #include <thread>
 #include <opencv2/opencv.hpp>
@@ -30,12 +31,14 @@ int main(int argc, char** argv)
     bool save_frames = false;
     bool show_display = true;  // default: show
     std::string network;
+    std::string topic = "rt/depth_image";
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--save") save_frames = true;
         else if (arg == "--no-display") show_display = false;
         else if (arg == "--network" && i + 1 < argc) network = argv[++i];
+        else if (arg == "--topic" && i + 1 < argc) topic = argv[++i];
     }
 
     // Initialize DDS
@@ -47,11 +50,13 @@ int main(int argc, char** argv)
     int width = 0, height = 0;
     float data_min = 0, data_max = 0, data_mean = 0;
     std::vector<float> latest_frame;
+    std::mutex frame_mutex;
 
     unitree::robot::SubscriptionBase<unitree_go::msg::dds_::HeightMap_> sub(
-        "rt/depth_image",
+        topic,
         [&](const void* msg) {
             auto& hm = *static_cast<const unitree_go::msg::dds_::HeightMap_*>(msg);
+            std::lock_guard<std::mutex> lock(frame_mutex);
             width = hm.width();
             height = hm.height();
 
@@ -69,7 +74,7 @@ int main(int argc, char** argv)
         });
 
     sub.set_timeout_ms(5000);
-    std::cout << "[test_depth_dds] Waiting for rt/depth_image..." << std::endl;
+    std::cout << "[test_depth_dds] Waiting for " << topic << "..." << std::endl;
     sub.wait_for_connection();
     std::cout << "[test_depth_dds] Connected! Receiving depth frames..." << std::endl;
 
@@ -87,18 +92,36 @@ int main(int argc, char** argv)
         // Process at ~10 Hz to match depth update rate
         auto t0 = std::chrono::steady_clock::now();
 
-        if (frame_count > last_count) {
-            last_count = frame_count;
-            std::cout << "[test_depth_dds] frame=" << frame_count
-                      << " size=" << width << "x" << height
-                      << " min=" << data_min
-                      << " max=" << data_max
-                      << " mean=" << data_mean
+        int snapshot_count;
+        int snapshot_width;
+        int snapshot_height;
+        float snapshot_min;
+        float snapshot_max;
+        float snapshot_mean;
+        std::vector<float> snapshot_frame;
+        {
+            std::lock_guard<std::mutex> lock(frame_mutex);
+            snapshot_count = frame_count;
+            snapshot_width = width;
+            snapshot_height = height;
+            snapshot_min = data_min;
+            snapshot_max = data_max;
+            snapshot_mean = data_mean;
+            snapshot_frame = latest_frame;
+        }
+
+        if (snapshot_count > last_count) {
+            last_count = snapshot_count;
+            std::cout << "[test_depth_dds] frame=" << snapshot_count
+                      << " size=" << snapshot_width << "x" << snapshot_height
+                      << " min=" << snapshot_min
+                      << " max=" << snapshot_max
+                      << " mean=" << snapshot_mean
                       << std::endl;
         }
 
         // Save debug PGM
-        if (save_frames && !latest_frame.empty()) {
+        if (save_frames && !snapshot_frame.empty()) {
             static int save_idx = 0;
             static auto last_save = std::chrono::steady_clock::now();
             auto now = std::chrono::steady_clock::now();
@@ -109,8 +132,8 @@ int main(int argc, char** argv)
                 system("mkdir -p /tmp/depth_dds 2>/dev/null");
 
                 std::ofstream ofs(fname, std::ios::binary);
-                ofs << "P5\n" << width << " " << height << "\n255\n";
-                for (float v : latest_frame) {
+                ofs << "P5\n" << snapshot_width << " " << snapshot_height << "\n255\n";
+                for (float v : snapshot_frame) {
                     float t = (v + 0.5f);
                     uint8_t p = static_cast<uint8_t>(std::clamp(t * 255.0f, 0.0f, 255.0f));
                     ofs.write(reinterpret_cast<const char*>(&p), 1);
@@ -119,12 +142,12 @@ int main(int argc, char** argv)
             }
         }
 
-        if (show_display && width > 0 && height > 0) {
-            if (!latest_frame.empty()) {
-                cv::Mat img(height, width, CV_32FC1);
-                for (int y = 0; y < height; ++y)
-                    for (int x = 0; x < width; ++x) {
-                        float v = 1.0f - (latest_frame[y * width + x] + 0.5f);
+        if (show_display && snapshot_width > 0 && snapshot_height > 0) {
+            if (!snapshot_frame.empty()) {
+                cv::Mat img(snapshot_height, snapshot_width, CV_32FC1);
+                for (int y = 0; y < snapshot_height; ++y)
+                    for (int x = 0; x < snapshot_width; ++x) {
+                        float v = 1.0f - (snapshot_frame[y * snapshot_width + x] + 0.5f);
                         img.at<float>(y, x) = std::clamp(v, 0.0f, 1.0f);
                     }
                 cv::Mat disp;
@@ -138,6 +161,11 @@ int main(int argc, char** argv)
         }
     }
 
-    std::cout << "[test_depth_dds] Done. Received " << frame_count << " frames." << std::endl;
+    int final_frame_count;
+    {
+        std::lock_guard<std::mutex> lock(frame_mutex);
+        final_frame_count = frame_count;
+    }
+    std::cout << "[test_depth_dds] Done. Received " << final_frame_count << " frames." << std::endl;
     return 0;
 }

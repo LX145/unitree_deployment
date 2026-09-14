@@ -106,3 +106,6 @@ depth_camera:
   filter_chain: false
   filter_chain_temporal: false
   history: 1
+  publish_debug_dds: true
+  debug_publish_hz: 10.0
+  debug_topic: rt/depth_image_debug
