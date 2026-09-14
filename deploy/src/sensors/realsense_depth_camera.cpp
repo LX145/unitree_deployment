@@ -150,6 +150,17 @@ RealSenseDepthCamera::~RealSenseDepthCamera()
     stop();
 }
 
+bool RealSenseDepthCamera::get_debug_source_depth(
+    std::vector<float>& depth, int& width, int& height) const
+{
+    std::lock_guard<std::mutex> lock(debug_source_mtx_);
+    if (debug_source_depth_.empty()) return false;
+    depth = debug_source_depth_;
+    width = debug_source_width_;
+    height = debug_source_height_;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // start / stop
 // ---------------------------------------------------------------------------
@@ -540,6 +551,17 @@ void RealSenseDepthCamera::capture_loop()
                 const auto* raw = reinterpret_cast<const uint16_t*>(depth.get_data());
                 int raw_w = depth.get_width();
                 int raw_h = depth.get_height();
+
+                if (cfg_.capture_debug_source_depth) {
+                    std::vector<float> source_depth(static_cast<std::size_t>(raw_w) * raw_h);
+                    for (std::size_t i = 0; i < source_depth.size(); ++i) {
+                        source_depth[i] = static_cast<float>(raw[i]) * depth_scale;
+                    }
+                    std::lock_guard<std::mutex> lock(debug_source_mtx_);
+                    debug_source_depth_ = std::move(source_depth);
+                    debug_source_width_ = raw_w;
+                    debug_source_height_ = raw_h;
+                }
 
                 // ---- preprocess ----
                 auto frame = process_depth(

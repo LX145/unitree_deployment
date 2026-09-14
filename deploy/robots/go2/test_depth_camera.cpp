@@ -32,53 +32,69 @@ void on_signal(int) { g_stop = 1; }
 // ---------------------------------------------------------------------------
 // OpenCV depth visualisation
 // ---------------------------------------------------------------------------
+static cv::Mat metric_depth_colormap(const cv::Mat& depth_m,
+                                     float near_depth, float far_depth)
+{
+    cv::Mat normalized(depth_m.size(), CV_32FC1);
+    for (int y = 0; y < depth_m.rows; ++y) {
+        for (int x = 0; x < depth_m.cols; ++x) {
+            const float depth = depth_m.at<float>(y, x);
+            normalized.at<float>(y, x) = depth > 0.0f
+                ? std::clamp((far_depth - depth) / (far_depth - near_depth), 0.0f, 1.0f)
+                : 0.0f;
+        }
+    }
+    cv::Mat gray;
+    normalized.convertTo(gray, CV_8UC1, 255.0);
+    cv::Mat color;
+    cv::applyColorMap(gray, color, cv::COLORMAP_TURBO);
+    color.setTo(cv::Scalar(0, 0, 0), depth_m <= 0.0f);
+    return color;
+}
+
+static void show_source_depth_opencv(const std::vector<float>& depth_m,
+                                     int w, int h,
+                                     float min_depth, float max_depth)
+{
+    if (depth_m.size() != static_cast<std::size_t>(w * h)) return;
+    cv::Mat metric(h, w, CV_32FC1, const_cast<float*>(depth_m.data()));
+    cv::Mat color = metric_depth_colormap(metric, min_depth, max_depth);
+    cv::putText(color, "SDK depth before policy crop/resize", cv::Point(8, 22),
+                cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(255, 255, 255), 1);
+    cv::imshow("RealSense Source Depth", color);
+}
+
 static void show_depth_opencv(const std::vector<float>& depth_obs,
                               int w, int h, int frame_count,
                               float output_min, float output_max,
                               float min_depth, float max_depth)
 {
     const float output_range = output_max - output_min;
-    cv::Mat gray(h, w, CV_32FC1);
+    cv::Mat metric(h, w, CV_32FC1);
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             const float value = depth_obs[y * w + x];
-            gray.at<float>(y, x) = std::clamp(
-                (output_max - value) / output_range, 0.0f, 1.0f);
+            const float t = std::clamp((value - output_min) / output_range, 0.0f, 1.0f);
+            metric.at<float>(y, x) = min_depth + t * (max_depth - min_depth);
         }
     }
-    gray.convertTo(gray, CV_8UC1, 255.0);
-
-    // 4x nearest-neighbour for visibility
+    // Use a tighter display range for obstacle inspection. Values remain the
+    // exact policy tensor; only this visualization maps >=1.2 m to the far color.
+    const float display_far_depth = std::min(max_depth, 1.2f);
+    cv::Mat color = metric_depth_colormap(metric, min_depth, display_far_depth);
     cv::Mat big;
-    cv::resize(gray, big, cv::Size(), 4.0, 4.0, cv::INTER_NEAREST);
+    cv::resize(color, big, cv::Size(), 8.0, 8.0, cv::INTER_NEAREST);
 
-    // Convert to BGR for coloured overlay text
-    cv::Mat display;
-    cv::cvtColor(big, display, cv::COLOR_GRAY2BGR);
-
-    // Overlay text (white)
     char buf[128];
-    snprintf(buf, sizeof(buf), "#%d  %dx%d  [white=%.2fm black=%.2fm]",
+    snprintf(buf, sizeof(buf), "#%d %dx%d policy input [%.2f, %.2f]m",
              frame_count, w, h, min_depth, max_depth);
-    cv::putText(display, buf, cv::Point(4, 12),
+    cv::putText(big, buf, cv::Point(4, 14),
                 cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(200, 200, 200), 1);
-
-    // Scale bar at bottom
-    int bar_y = big.rows - 12;
-    int bar_w = big.cols;
-    for (int x = 0; x < bar_w; ++x) {
-        uchar v = static_cast<uchar>(255 - (x * 255 / bar_w));  // left=near(white), right=far(black)
-        cv::line(display, cv::Point(x, bar_y), cv::Point(x, bar_y + 8),
-                 cv::Scalar(v, v, v), 1);
-    }
-    snprintf(buf, sizeof(buf), "%.2fm", min_depth);
-    cv::putText(display, buf, cv::Point(2, bar_y - 2),
-                cv::FONT_HERSHEY_SIMPLEX, 0.3, cv::Scalar(200, 200, 200), 1);
-    snprintf(buf, sizeof(buf), "%.2fm", max_depth);
-    cv::putText(display, buf, cv::Point(bar_w - 34, bar_y - 2),
-                cv::FONT_HERSHEY_SIMPLEX, 0.3, cv::Scalar(200, 200, 200), 1);
-
-    cv::imshow("RealSense D435i Depth", display);
+    const float center_depth = metric.at<float>(h / 2, w / 2);
+    snprintf(buf, sizeof(buf), "center=%.3fm, color range <=%.2fm", center_depth, display_far_depth);
+    cv::putText(big, buf, cv::Point(4, big.rows - 6),
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
+    cv::imshow("Policy Depth Input", big);
 }
 
 #else
@@ -137,6 +153,7 @@ int main()
     // This standalone process has no controller DDS initialization. Preview the
     // local policy-input buffer directly instead of republishing it.
     cfg.publish_debug_dds = false;
+    cfg.capture_debug_source_depth = true;
     spdlog::info(
         "Loaded deployment depth pipeline from {}: raw={}x{}@{}Hz, output={}x{}@{:.1f}Hz, "
         "depth=[{:.2f}, {:.2f}]m, invalid_below={:.2f}m",
@@ -169,6 +186,9 @@ int main()
 
         // Read latest depth from shared buffer
         std::vector<float> frame;
+        std::vector<float> source_depth;
+        int source_width = 0;
+        int source_height = 0;
         double ts = 0;
         {
             std::lock_guard<std::mutex> lock(robot->data.depth_mtx);
@@ -188,6 +208,11 @@ int main()
             show_depth_opencv(frame, cfg.out_width, cfg.out_height,
                               frame_count, cfg.output_min, cfg.output_max,
                               cfg.min_depth, cfg.max_depth);
+            if (cam.get_debug_source_depth(source_depth, source_width, source_height)) {
+                show_source_depth_opencv(
+                    source_depth, source_width, source_height,
+                    cfg.invalid_depth_threshold, cfg.max_depth);
+            }
 
             const int display_delay_ms = std::max(
                 1, static_cast<int>(std::lround(1000.0f / cfg.update_hz)));

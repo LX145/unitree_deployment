@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include <yaml-cpp/yaml.h>
 
@@ -82,6 +83,7 @@ public:
         bool publish_debug_dds = false;
         float debug_publish_hz = 10.0f;
         std::string debug_topic = "rt/depth_image_debug";
+        bool capture_debug_source_depth = false;
 
         /// Load config from a YAML node (typically deploy.yaml's "depth_camera" section).
         static Config from_yaml(const YAML::Node& node);
@@ -105,6 +107,10 @@ public:
     bool is_running() const override { return running_.load(); }
     bool is_ready() const override { return ready_.load(); }
     bool has_failed() const override { return failed_.load(); }
+
+    /// Copy the latest metric depth frame after the configured SDK filters but
+    /// before policy crop, resize, invalid-value handling and normalization.
+    bool get_debug_source_depth(std::vector<float>& depth, int& width, int& height) const;
 
 private:
     /// The background loop: capture → preprocess → write to robot->data.
@@ -136,6 +142,11 @@ private:
     double last_distribution_log_time_ = 0.0;
 #endif
     double last_save_time_ = 0.0;
+
+    mutable std::mutex debug_source_mtx_;
+    std::vector<float> debug_source_depth_;
+    int debug_source_width_ = 0;
+    int debug_source_height_ = 0;
 };
 
 // helper: get monotonic time in seconds
