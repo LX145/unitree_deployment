@@ -10,7 +10,7 @@ default_joint_pos: [0.0, -0.0, 0.0, -0.0, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, 
 commands:
   base_velocity:
     ranges:
-      lin_vel_x: [-1.0, 1.5]
+      lin_vel_x: [-1.0, 1.0]
       lin_vel_y: [-0.8, 0.8]
       ang_vel_z: [-1.57, 1.57]
       heading: [-3.14, 3.14]
@@ -103,8 +103,8 @@ depth_camera:
   real_crop: [0, 0, 16, 16]
   render_width: 64
   render_height: 36
-  filter_chain: false
-  filter_chain_temporal: false
+  filter_chain: true
+  filter_chain_temporal: true
   history: 1
   publish_debug_dds: true
   debug_publish_hz: 10.0

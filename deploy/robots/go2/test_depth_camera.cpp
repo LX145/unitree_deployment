@@ -47,7 +47,7 @@ static cv::Mat metric_depth_colormap(const cv::Mat& depth_m,
     cv::Mat gray;
     normalized.convertTo(gray, CV_8UC1, 255.0);
     cv::Mat color;
-    cv::applyColorMap(gray, color, cv::COLORMAP_TURBO);
+    cv::applyColorMap(gray, color, cv::COLORMAP_JET);
     color.setTo(cv::Scalar(0, 0, 0), depth_m <= 0.0f);
     return color;
 }
