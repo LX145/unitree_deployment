@@ -86,7 +86,7 @@ depth_camera:
   output_max: 0.5
   update_hz: 50.0
   depth_update_interval: 1
-  resize_mode: bilinear
+  resize_mode: nearest
   target_fx: 32.27484130859375
   replace_invalid_with_max: true
   blur_kernel_size: 1

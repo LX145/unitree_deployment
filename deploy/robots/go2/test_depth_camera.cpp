@@ -11,7 +11,10 @@
 
 #include <iostream>
 #include <iomanip>
+#include <atomic>
 #include <csignal>
+#include <signal.h>
+#include <unistd.h>
 #include <filesystem>
 #include <numeric>
 #include <thread>
@@ -26,7 +29,25 @@
 #endif
 
 volatile sig_atomic_t g_stop = 0;
-void on_signal(int) { g_stop = 1; }
+void on_signal(int signal_number)
+{
+    if (g_stop) {
+        // A second signal means the SDK cleanup path is stuck. _exit is
+        // async-signal-safe and lets the OS release the USB resources.
+        _exit(128 + signal_number);
+    }
+    g_stop = 1;
+}
+
+static void install_signal_handlers()
+{
+    struct sigaction action {};
+    action.sa_handler = on_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    sigaction(SIGINT, &action, nullptr);
+    sigaction(SIGTERM, &action, nullptr);
+}
 
 #ifdef HAS_OPENCV
 // ---------------------------------------------------------------------------
@@ -70,31 +91,32 @@ static void show_depth_opencv(const std::vector<float>& depth_obs,
                               float min_depth, float max_depth)
 {
     const float output_range = output_max - output_min;
-    cv::Mat metric(h, w, CV_32FC1);
+    cv::Mat gray(h, w, CV_8UC1);
+    float center_depth = min_depth;
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             const float value = depth_obs[y * w + x];
             const float t = std::clamp((value - output_min) / output_range, 0.0f, 1.0f);
-            metric.at<float>(y, x) = min_depth + t * (max_depth - min_depth);
+            gray.at<uint8_t>(y, x) = static_cast<uint8_t>(std::lround(t * 255.0f));
+            if (x == w / 2 && y == h / 2) {
+                center_depth = min_depth + t * (max_depth - min_depth);
+            }
         }
     }
-    // Use a tighter display range for obstacle inspection. Values remain the
-    // exact policy tensor; only this visualization maps >=1.2 m to the far color.
-    const float display_far_depth = std::min(max_depth, 1.2f);
-    cv::Mat color = metric_depth_colormap(metric, min_depth, display_far_depth);
     cv::Mat big;
-    cv::resize(color, big, cv::Size(), 8.0, 8.0, cv::INTER_NEAREST);
+    cv::resize(gray, big, cv::Size(), 8.0, 8.0, cv::INTER_NEAREST);
+    cv::Mat display;
+    cv::cvtColor(big, display, cv::COLOR_GRAY2BGR);
 
     char buf[128];
-    snprintf(buf, sizeof(buf), "#%d %dx%d policy input [%.2f, %.2f]m",
+    snprintf(buf, sizeof(buf), "#%d %dx%d policy input: near=black far=white [%.2f, %.2f]m",
              frame_count, w, h, min_depth, max_depth);
-    cv::putText(big, buf, cv::Point(4, 14),
-                cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(200, 200, 200), 1);
-    const float center_depth = metric.at<float>(h / 2, w / 2);
-    snprintf(buf, sizeof(buf), "center=%.3fm, color range <=%.2fm", center_depth, display_far_depth);
-    cv::putText(big, buf, cv::Point(4, big.rows - 6),
-                cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255), 1);
-    cv::imshow("Policy Depth Input", big);
+    cv::putText(display, buf, cv::Point(4, 14),
+                cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(0, 0, 0), 2);
+    snprintf(buf, sizeof(buf), "center=%.3fm", center_depth);
+    cv::putText(display, buf, cv::Point(4, display.rows - 6),
+                cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(0, 0, 0), 2);
+    cv::imshow("Policy Depth Input", display);
 }
 
 #else
@@ -163,25 +185,41 @@ int main()
 
     auto robot = std::make_shared<isaaclab::Articulation>();
 
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
+#ifdef HAS_OPENCV
+    // Create the windows before starting the camera so the UI remains usable
+    // while the RealSense pipeline is warming up or reconnecting.
+    cv::namedWindow("Policy Depth Input", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("RealSense Source Depth", cv::WINDOW_AUTOSIZE);
+    cv::Mat waiting(180, 480, CV_8UC3, cv::Scalar(32, 32, 32));
+    cv::putText(waiting, "Waiting for RealSense depth...", cv::Point(35, 95),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(220, 220, 220), 1);
+    cv::imshow("Policy Depth Input", waiting);
+    cv::imshow("RealSense Source Depth", waiting);
+    cv::waitKey(1);
+#endif
+
+    // Some HighGUI backends install their own handlers while creating windows.
+    // Register ours afterwards so Ctrl+C in the launching terminal is reliable.
+    install_signal_handlers();
 
     RealSenseDepthCamera cam(cfg, robot);
     cam.start();
 
     spdlog::info("Depth camera starting; waiting for first valid frame...");
 
-#ifdef HAS_OPENCV
-    bool window_created = false;
-#endif
-
     int frame_count = 0;
-    bool camera_failed = false;
+    bool failure_reported = false;
     while (!g_stop) {
         if (cam.has_failed()) {
-            spdlog::error("Depth camera test failed: pipeline did not produce a valid stream");
-            camera_failed = true;
-            break;
+            if (!failure_reported) {
+                spdlog::warn(
+                    "Depth stream unavailable; waiting for the background reconnect loop "
+                    "(press Ctrl+C, Q, or ESC to stop)");
+                failure_reported = true;
+            }
+        } else if (failure_reported) {
+            spdlog::info("Depth stream recovered");
+            failure_reported = false;
         }
 
         // Read latest depth from shared buffer
@@ -200,9 +238,7 @@ int main()
 
         if (!frame.empty()) {
 #ifdef HAS_OPENCV
-            if (!window_created) {
-                cv::namedWindow("RealSense D435i Depth", cv::WINDOW_AUTOSIZE);
-                window_created = true;
+            if (frame_count == 0) {
                 spdlog::info("First valid depth frame received. Press Ctrl+C, Q, or ESC to stop.");
             }
             show_depth_opencv(frame, cfg.out_width, cfg.out_height,
@@ -213,27 +249,29 @@ int main()
                     source_depth, source_width, source_height,
                     cfg.invalid_depth_threshold, cfg.max_depth);
             }
-
-            const int display_delay_ms = std::max(
-                1, static_cast<int>(std::lround(1000.0f / cfg.update_hz)));
-            const int key = cv::waitKey(display_delay_ms);
-            const int key_code = key < 0 ? key : key & 0xff;
-            if (key_code == 3 || key_code == 27 || key_code == 'q' || key_code == 'Q') {
-                // Ctrl+C is delivered as ASCII ETX (3) when the OpenCV window,
-                // rather than the launching terminal, owns keyboard focus.
-                spdlog::info("Key pressed, exiting");
-                g_stop = 1;
-            }
-            // NOTE: do NOT auto-detect window close via getWindowProperty —
-            // it returns -1 on some systems even when the window is visible.
 #else
             show_depth_terminal(frame, cfg.out_width, cfg.out_height,
                                 ts, frame_count, cfg.output_min, cfg.output_max);
 #endif
             frame_count++;
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+
+#ifdef HAS_OPENCV
+        // Always pump HighGUI events, including while waiting for the first
+        // frame. Otherwise the windows remain blank/unresponsive.
+        const int display_delay_ms = std::max(
+            1, static_cast<int>(std::lround(1000.0f / cfg.update_hz)));
+        const int key = cv::waitKey(display_delay_ms);
+        const int key_code = key < 0 ? key : key & 0xff;
+        if (key_code == 3 || key_code == 27 || key_code == 'q' || key_code == 'Q') {
+            spdlog::info("Exit requested");
+            g_stop = 1;
+        }
+#else
+        if (frame.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+#endif
     }
 
 #ifdef HAS_OPENCV
@@ -241,7 +279,22 @@ int main()
 #endif
 
     spdlog::info("Shutting down...");
+
+    // librealsense can occasionally hang while destroying a pipeline after a
+    // device-side hardware error. Keep the normal cleanup path, but never let
+    // this standalone diagnostic utility become impossible to terminate.
+    std::atomic_bool camera_stopped{false};
+    std::thread shutdown_watchdog([&camera_stopped]() {
+        for (int elapsed_ms = 0; elapsed_ms < 3000; elapsed_ms += 50) {
+            if (camera_stopped.load()) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        spdlog::error("RealSense shutdown did not finish within 3 seconds; forcing process exit");
+        _exit(0);
+    });
     cam.stop();
+    camera_stopped.store(true);
+    shutdown_watchdog.join();
 
     {
         std::lock_guard<std::mutex> lock(robot->data.depth_mtx);
@@ -252,11 +305,6 @@ int main()
             spdlog::info("Final depth_obs: size={} min={:.4f} max={:.4f} mean={:.4f}",
                          obs.size(), *mn, *mx, mean);
         }
-    }
-
-    if (camera_failed) {
-        spdlog::error("Done (failed).");
-        return 1;
     }
 
     spdlog::info("Done.");

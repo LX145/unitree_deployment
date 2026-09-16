@@ -393,7 +393,13 @@ void RealSenseDepthCamera::capture_loop()
             continue;
         }
         rs2::device device = devices.front();
-        realsense_diagnostics::install_device_change_callback(context, device);
+        // The standalone monitor owns no controller state that needs USB
+        // hot-plug diagnostics. Avoid installing callbacks there: some
+        // librealsense/UVC combinations can delay the first frame and hang
+        // context destruction after pipe.stop().
+        if (!cfg_.monitor_only) {
+            realsense_diagnostics::install_device_change_callback(context, device);
+        }
 
         rs2::pipeline pipe(context);
         rs2::config rs_cfg;
@@ -403,12 +409,18 @@ void RealSenseDepthCamera::capture_loop()
 
         float depth_scale = 0.001f;  // default: 1 mm
         CropRect crop{0, 0, cfg_.raw_width, cfg_.raw_height};
+        // Keep the active profile alive for the complete pipeline session.
+        // Some librealsense/UVC combinations stop delivering the first stream
+        // when the profile returned by pipe.start() is released immediately.
+        rs2::pipeline_profile profile;
         try {
-            rs2::pipeline_profile profile = pipe.start(rs_cfg);
+            profile = pipe.start(rs_cfg);
             auto depth_sensor = profile.get_device().first<rs2::depth_sensor>();
             if (depth_sensor) {
                 depth_scale = depth_sensor.get_depth_scale();
-                realsense_diagnostics::install_notification_callback(depth_sensor);
+                if (!cfg_.monitor_only) {
+                    realsense_diagnostics::install_notification_callback(depth_sensor);
+                }
             }
             if (consecutive_frame_timeouts == 0) {
                 spdlog::info("[Depth] pipeline started (depth_scale={})", depth_scale);
@@ -500,14 +512,23 @@ void RealSenseDepthCamera::capture_loop()
         const auto desired_period =
             std::chrono::duration<double>(1.0 / cfg_.update_hz);
         auto next_wake = clock::now();
+        auto last_frame_or_start = clock::now();
+        bool received_frame = false;
 
         while (running_.load()) {
             try {
                 // ---- get frame ----
                 rs2::frameset frames;
-                if (!pipe.try_wait_for_frames(&frames, 1000)) {
+                if (!pipe.try_wait_for_frames(&frames, 100)) {
+                    const auto wait_now = clock::now();
+                    const auto allowed_gap = received_frame
+                        ? std::chrono::seconds(1)
+                        : std::chrono::seconds(3);
+                    if (wait_now - last_frame_or_start < allowed_gap) {
+                        continue;
+                    }
                     ++consecutive_frame_timeouts;
-                    const auto timeout_now = std::chrono::steady_clock::now();
+                    const auto timeout_now = clock::now();
                     if (last_frame_timeout_log.time_since_epoch().count() == 0 ||
                         timeout_now - last_frame_timeout_log >= std::chrono::seconds(10)) {
                         spdlog::error(
@@ -526,6 +547,9 @@ void RealSenseDepthCamera::capture_loop()
                     failed_.store(true);
                     break;
                 }
+
+                received_frame = true;
+                last_frame_or_start = clock::now();
 
                 rs2::depth_frame depth = frames.get_depth_frame();
                 if (!depth) {
