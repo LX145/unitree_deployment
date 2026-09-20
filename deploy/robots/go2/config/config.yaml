@@ -37,4 +37,5 @@ FSM:
     transitions:
       Passive: LT + B.on_pressed
       FixStand: LT + A.on_pressed
-    policy_dir: config/policy/velocity/depth_student
+    runner: depth_e2e
+    policy_dir: config/policy/velocity/depth_e2e

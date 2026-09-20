@@ -63,7 +63,23 @@ public:
             "rt/depth_image",
             [this](const void* msg) {
                 const auto& heightmap = *static_cast<const HeightMap_t*>(msg);
-                const bool valid = !heightmap.data().empty();
+                const std::size_t expected_size =
+                    static_cast<std::size_t>(width_) * height_;
+                const bool valid = heightmap.data().size() == expected_size;
+                if (!valid) {
+                    if (!size_error_reported_.exchange(true)) {
+                        spdlog::error(
+                            "[DDSDepth] rejected frame with {} values; expected {} ({}x{})",
+                            heightmap.data().size(), expected_size, width_, height_);
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
+                        robot_->data.depth_valid = false;
+                    }
+                    ready_.store(false);
+                    return;
+                }
+                size_error_reported_.store(false);
                 {
                     std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
                     robot_->data.depth_obs = heightmap.data();
@@ -148,6 +164,7 @@ private:
     std::shared_ptr<unitree::robot::SubscriptionBase<HeightMap_t>> sub_;
     std::atomic<bool> running_{false};
     std::atomic<bool> ready_{false};
+    std::atomic<bool> size_error_reported_{false};
 #ifdef ENABLE_DEPTH_STATS
     bool log_distribution_ = false;
 #endif

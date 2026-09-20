@@ -96,6 +96,11 @@ public:
                 throw std::runtime_error("Input name " + name_str + " not found in observations.");
             }
             auto& input_data = obs.at(name_str);
+            if (input_data.size() != static_cast<std::size_t>(input_sizes[i])) {
+                throw std::runtime_error(
+                    "Input " + name_str + " has " + std::to_string(input_data.size()) +
+                    " values, expected " + std::to_string(input_sizes[i]) + ".");
+            }
             input_tensors.push_back(Ort::Value::CreateTensor<float>(
                 memory_info, input_data.data(), input_sizes[i],
                 input_shapes[i].data(), input_shapes[i].size()));
@@ -236,5 +241,52 @@ private:
     bool encode_on_new_depth_ = false;  // enabled for asynchronous MuJoCo DDS input
     uint64_t last_depth_seq_ = 0;
     int step_count_ = 0;
+};
+
+// Dual-ONNX inference for the parkour end-to-end depth policy.
+class E2EDepthRunner : public Algorithms
+{
+public:
+    E2EDepthRunner(const std::string& encoder_path,
+                   const std::string& actor_path)
+        : depth_encoder_(std::make_unique<OrtRunner>(encoder_path))
+        , actor_(std::make_unique<OrtRunner>(actor_path))
+        , hidden_state_(256, 0.0f)
+        , latent_(48, 0.0f)
+    {
+        std::cout << "[E2EDepthRunner] encoder=" << encoder_path
+                  << " actor=" << actor_path << std::endl;
+    }
+
+    std::vector<float> act(
+        std::unordered_map<std::string, std::vector<float>> obs_map) override
+    {
+        std::unordered_map<std::string, std::vector<float>> encoder_inputs;
+        encoder_inputs["depth"] = obs_map.at("depth");
+        encoder_inputs["proprio_history"] = obs_map.at("proprio_history");
+        encoder_inputs["hidden_in"] = hidden_state_;
+
+        auto encoder_outputs = depth_encoder_->act_multi(encoder_inputs);
+        latent_ = encoder_outputs.at("latent");
+        hidden_state_ = encoder_outputs.at("hidden_out");
+
+        std::unordered_map<std::string, std::vector<float>> actor_inputs;
+        actor_inputs["proprio"] = obs_map.at("proprio");
+        actor_inputs["proprio_history"] = obs_map.at("proprio_history");
+        actor_inputs["latent"] = latent_;
+        return actor_->act(actor_inputs);
+    }
+
+    void reset() override
+    {
+        std::fill(hidden_state_.begin(), hidden_state_.end(), 0.0f);
+        std::fill(latent_.begin(), latent_.end(), 0.0f);
+    }
+
+private:
+    std::unique_ptr<OrtRunner> depth_encoder_;
+    std::unique_ptr<OrtRunner> actor_;
+    std::vector<float> hidden_state_;
+    std::vector<float> latent_;
 };
 };

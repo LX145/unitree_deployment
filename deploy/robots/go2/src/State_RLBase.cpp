@@ -134,11 +134,16 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto actor_onnx = onnx_dir / "policy_actor.onnx";
 
     if (std::filesystem::exists(depth_onnx) && std::filesystem::exists(actor_onnx)) {
-        const int depth_update_interval =
-            deploy_cfg["depth_camera"]["depth_update_interval"].as<int>(1);
-        env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
-            depth_onnx.string(), actor_onnx.string(), env->robot,
-            depth_update_interval, false);
+        if (cfg["runner"].as<std::string>("") == "depth_e2e") {
+            env->alg = std::make_unique<isaaclab::E2EDepthRunner>(
+                depth_onnx.string(), actor_onnx.string());
+        } else {
+            const int depth_update_interval =
+                deploy_cfg["depth_camera"]["depth_update_interval"].as<int>(1);
+            env->alg = std::make_unique<isaaclab::SplitDepthRunner>(
+                depth_onnx.string(), actor_onnx.string(), env->robot,
+                depth_update_interval, false);
+        }
     } else {
         env->alg = std::make_unique<isaaclab::OrtRunner>(onnx_dir / "policy.onnx");
     }
