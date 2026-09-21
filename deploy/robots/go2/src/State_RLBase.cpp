@@ -3,8 +3,11 @@
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <stdexcept>
+#include <unitree/dds_wrapper/common/Publisher.h>
+#include <unitree/idl/go2/HeightMap_.hpp>
 #ifdef HAS_REALSENSE
 #include "sensors/realsense_depth_camera.h"
 #endif
@@ -132,11 +135,47 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto onnx_dir = policy_dir / "exported";
     auto depth_onnx = onnx_dir / "policy_depth.onnx";
     auto actor_onnx = onnx_dir / "policy_actor.onnx";
+    auto terrain_decoder_onnx = onnx_dir / "policy_terrain_decoder.onnx";
 
     if (std::filesystem::exists(depth_onnx) && std::filesystem::exists(actor_onnx)) {
         if (cfg["runner"].as<std::string>("") == "depth_e2e") {
+            if (!std::filesystem::exists(terrain_decoder_onnx)) {
+                throw std::runtime_error(
+                    "E2E depth policy is missing " + terrain_decoder_onnx.string());
+            }
+            using TerrainMsg = unitree_go::msg::dds_::HeightMap_;
+            auto terrain_publisher =
+                std::make_shared<unitree::robot::PublisherBase<TerrainMsg>>("rt/terrain_decode");
             env->alg = std::make_unique<isaaclab::E2EDepthRunner>(
-                depth_onnx.string(), actor_onnx.string());
+                depth_onnx.string(), actor_onnx.string(), terrain_decoder_onnx.string(),
+                [terrain_publisher](const std::vector<float>& decoded_scan) {
+                    constexpr std::size_t scan_size = 17 * 11;
+                    if (decoded_scan.size() != scan_size) {
+                        throw std::runtime_error(
+                            "Terrain decoder produced " + std::to_string(decoded_scan.size()) +
+                            " values, expected " + std::to_string(scan_size));
+                    }
+
+                    // Training target: base_z - hit_z - 0.3. Convert it into local terrain
+                    // height relative to the base before publishing the HeightMap message.
+                    std::vector<float> local_heights(scan_size);
+                    std::transform(
+                        decoded_scan.begin(), decoded_scan.end(), local_heights.begin(),
+                        [](float value) { return -value - 0.3f; });
+
+                    TerrainMsg message;
+                    const auto now = std::chrono::steady_clock::now().time_since_epoch();
+                    message.stamp(std::chrono::duration<double>(now).count());
+                    message.frame_id("go2_base");
+                    message.resolution(0.1f);
+                    message.width(17);
+                    message.height(11);
+                    message.origin({-0.3f, -0.5f});
+                    message.data(std::move(local_heights));
+                    terrain_publisher->Write(message, 0);
+                });
+            spdlog::info(
+                "[Terrain Decode] publishing 17x11 local height map on rt/terrain_decode");
         } else {
             const int depth_update_interval =
                 deploy_cfg["depth_camera"]["depth_update_interval"].as<int>(1);

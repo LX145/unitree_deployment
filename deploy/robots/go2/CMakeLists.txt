@@ -91,6 +91,11 @@ link_libraries(${PROJECT_NAME}_lib)
 
 add_executable(go2_ctrl main.cpp)
 
+# Read-only terrain-decoder web viewer. The implementation uses only POSIX sockets
+# and Unitree DDS, so the same target builds on x86_64 and Jetson aarch64.
+add_executable(terrain_web_viewer terrain_web_viewer.cpp)
+target_link_libraries(terrain_web_viewer ${COMMON_LIBS})
+
 # ---- OpenCV (optional, for depth camera test display) ----
 find_package(OpenCV QUIET)
 if(OpenCV_FOUND)

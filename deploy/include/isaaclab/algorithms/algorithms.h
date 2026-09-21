@@ -5,6 +5,7 @@
 
 #include "onnxruntime_cxx_api.h"
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <mutex>
 
@@ -247,15 +248,23 @@ private:
 class E2EDepthRunner : public Algorithms
 {
 public:
+    using TerrainDecodeCallback = std::function<void(const std::vector<float>&)>;
+
     E2EDepthRunner(const std::string& encoder_path,
-                   const std::string& actor_path)
+                   const std::string& actor_path,
+                   const std::string& terrain_decoder_path,
+                   TerrainDecodeCallback terrain_decode_callback)
         : depth_encoder_(std::make_unique<OrtRunner>(encoder_path))
         , actor_(std::make_unique<OrtRunner>(actor_path))
+        , terrain_decoder_(std::make_unique<OrtRunner>(terrain_decoder_path))
+        , terrain_decode_callback_(std::move(terrain_decode_callback))
         , hidden_state_(256, 0.0f)
         , latent_(48, 0.0f)
+        , terrain_latent_(16, 0.0f)
     {
         std::cout << "[E2EDepthRunner] encoder=" << encoder_path
-                  << " actor=" << actor_path << std::endl;
+                  << " actor=" << actor_path
+                  << " terrain_decoder=" << terrain_decoder_path << std::endl;
     }
 
     std::vector<float> act(
@@ -270,6 +279,11 @@ public:
         latent_ = encoder_outputs.at("latent");
         hidden_state_ = encoder_outputs.at("hidden_out");
 
+        // The E2E latent contract is [foot(16), terrain(16), dynamics(16)].
+        std::copy_n(latent_.begin() + 16, 16, terrain_latent_.begin());
+        auto terrain_scan = terrain_decoder_->act({{"terrain_latent", terrain_latent_}});
+        terrain_decode_callback_(terrain_scan);
+
         std::unordered_map<std::string, std::vector<float>> actor_inputs;
         actor_inputs["proprio"] = obs_map.at("proprio");
         actor_inputs["proprio_history"] = obs_map.at("proprio_history");
@@ -281,12 +295,16 @@ public:
     {
         std::fill(hidden_state_.begin(), hidden_state_.end(), 0.0f);
         std::fill(latent_.begin(), latent_.end(), 0.0f);
+        std::fill(terrain_latent_.begin(), terrain_latent_.end(), 0.0f);
     }
 
 private:
     std::unique_ptr<OrtRunner> depth_encoder_;
     std::unique_ptr<OrtRunner> actor_;
+    std::unique_ptr<OrtRunner> terrain_decoder_;
+    TerrainDecodeCallback terrain_decode_callback_;
     std::vector<float> hidden_state_;
     std::vector<float> latent_;
+    std::vector<float> terrain_latent_;
 };
 };
