@@ -41,6 +41,8 @@ private:
     // Depth provider: RealSense (real) or DDS (sim), both write to env->robot->data.depth_obs
     std::shared_ptr<DepthProvider> depth_provider_;
     std::vector<float> entry_joint_pos_;
+    double policy_action_warmup_s_ = 0.0;
+    bool rl_gains_applied_ = false;
 };
 
 REGISTER_FSM(State_RLBase)

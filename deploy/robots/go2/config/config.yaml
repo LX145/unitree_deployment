@@ -39,3 +39,4 @@ FSM:
       FixStand: LT + A.on_pressed
     runner: depth_e2e
     policy_dir: config/policy/velocity/depth_e2e
+    policy_action_warmup_s: 1.0

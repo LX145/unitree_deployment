@@ -2,6 +2,7 @@
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
@@ -125,6 +126,7 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 {
     auto cfg = param::config["FSM"][state_string];
     auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
+    policy_action_warmup_s_ = cfg["policy_action_warmup_s"].as<double>(0.0);
 
     const auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
@@ -282,6 +284,19 @@ void State_RLBase::run()
         return;
     }
 
+    if (!rl_gains_applied_) {
+        for (int i = 0; i < env->robot->data.joint_stiffness.size(); ++i)
+        {
+            auto& motor = lowcmd->msg_.motor_cmd()[i];
+            motor.kp() = env->robot->data.joint_stiffness[i];
+            motor.kd() = env->robot->data.joint_damping[i];
+            motor.dq() = 0;
+            motor.tau() = 0;
+        }
+        rl_gains_applied_ = true;
+        spdlog::info("[RL Warmup] policy action ready; switched to RL gains");
+    }
+
     auto action = env->action_manager->processed_actions();
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
@@ -290,18 +305,38 @@ void State_RLBase::run()
 
 void State_RLBase::enter()
 {
-    // set gain
-    for (int i = 0; i < env->robot->data.joint_stiffness.size(); ++i)
-    {
-        lowcmd->msg_.motor_cmd()[i].kp() = env->robot->data.joint_stiffness[i];
-        lowcmd->msg_.motor_cmd()[i].kd() = env->robot->data.joint_damping[i];
-        lowcmd->msg_.motor_cmd()[i].dq() = 0;
-        lowcmd->msg_.motor_cmd()[i].tau() = 0;
-    }
-
     env->robot->update();
     entry_joint_pos_.assign(env->robot->data.joint_pos.data(),
                             env->robot->data.joint_pos.data() + env->robot->data.joint_pos.size());
+
+    // During policy warmup, keep the stronger FixStand gains while holding the
+    // entry posture. Switch to RL gains only when policy actions are released.
+    rl_gains_applied_ = false;
+    policy_action_ready_.store(false, std::memory_order_release);
+    if (policy_action_warmup_s_ > 0.0) {
+        const auto kp = param::config["FSM"]["FixStand"]["kp"].as<std::vector<float>>();
+        const auto kd = param::config["FSM"]["FixStand"]["kd"].as<std::vector<float>>();
+        const auto n = std::min(kp.size(), kd.size());
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            auto& motor = lowcmd->msg_.motor_cmd()[i];
+            motor.kp() = kp[i];
+            motor.kd() = kd[i];
+            motor.dq() = 0;
+            motor.tau() = 0;
+        }
+    } else {
+        for (int i = 0; i < env->robot->data.joint_stiffness.size(); ++i)
+        {
+            auto& motor = lowcmd->msg_.motor_cmd()[i];
+            motor.kp() = env->robot->data.joint_stiffness[i];
+            motor.kd() = env->robot->data.joint_damping[i];
+            motor.dq() = 0;
+            motor.tau() = 0;
+        }
+        rl_gains_applied_ = true;
+    }
+
     // Start depth provider (RealSense or DDS, depending on build)
     if (depth_provider_ && !depth_provider_->is_running()) {
         depth_provider_->start();
@@ -310,7 +345,6 @@ void State_RLBase::enter()
     // Reset synchronously so the 1 kHz command thread can never observe actions
     // left over from the previous RL-state entry. Hold entry_joint_pos_ until the
     // first complete inference result has been published.
-    policy_action_ready_.store(false, std::memory_order_release);
     env->reset();
 
     // Start policy thread
@@ -319,12 +353,23 @@ void State_RLBase::enter()
         using clock = std::chrono::high_resolution_clock;
         const std::chrono::duration<double> desiredDuration(env->step_dt);
         const auto dt = std::chrono::duration_cast<clock::duration>(desiredDuration);
+        const auto action_release_time = clock::now() +
+            std::chrono::duration_cast<clock::duration>(
+                std::chrono::duration<double>(policy_action_warmup_s_));
+
+        if (policy_action_warmup_s_ > 0.0) {
+            spdlog::info(
+                "[RL Warmup] holding entry posture for {:.3f}s while policy hidden state warms up",
+                policy_action_warmup_s_);
+        }
 
         auto sleepTill = clock::now() + dt;
         while (policy_thread_running.load(std::memory_order_acquire))
         {
             env->step();
-            policy_action_ready_.store(true, std::memory_order_release);
+            if (clock::now() >= action_release_time) {
+                policy_action_ready_.store(true, std::memory_order_release);
+            }
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }
