@@ -32,7 +32,7 @@ FSM:
     transitions: 
       Passive: LT + B.on_pressed
       FixStand: LT + A.on_pressed
-    policy_dir: config/policy/velocity/cts_gait
+    policy_dir: config/policy/velocity/flat_blind
   DepthVelocity:
     transitions:
       Passive: LT + B.on_pressed
