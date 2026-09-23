@@ -7,6 +7,7 @@
 #include "unitree/dds_wrapper/common/unitree_joystick.hpp"
 #include <mutex>
 #include <vector>
+#include <cstdint>
 
 namespace isaaclab
 {
@@ -53,8 +54,23 @@ struct ArticulationData
     std::vector<float> depth_obs;
     mutable std::mutex depth_mtx;
     bool depth_valid = false;
+    // Legacy alias for the local receive/write time. Prefer the explicit fields below.
     double depth_timestamp = 0.0;
-    uint64_t depth_seq = 0;  // monotonically increasing frame counter
+    double depth_source_timestamp = 0.0;  // Sensor/simulator-provided stamp, time base may differ.
+    double depth_rx_timestamp = 0.0;      // Local steady-clock time when depth_obs was written.
+    uint64_t depth_frame_number = 0;      // Sensor/simulator frame counter if available.
+    uint64_t depth_seq = 0;               // Monotonically increasing local depth buffer counter.
+
+    // Metadata for the exact depth buffer read by the observation pipeline.
+    bool depth_obs_last_read_valid = false;
+    uint64_t depth_obs_last_read_seq = 0;
+    uint64_t depth_obs_last_read_frame_number = 0;
+    double depth_obs_last_read_source_timestamp = 0.0;
+    double depth_obs_last_read_rx_timestamp = 0.0;
+
+    // Metadata for the latest lowstate sampled by Articulation::update().
+    uint32_t lowstate_tick = 0;
+    double lowstate_sample_timestamp = 0.0;
 };
 
 class Articulation

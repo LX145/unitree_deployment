@@ -4,6 +4,7 @@
 #pragma once
 
 #include "isaaclab/assets/articulation/articulation.h"
+#include <chrono>
 
 namespace unitree
 {
@@ -20,7 +21,11 @@ public:
 
     void update() override
     {
+        const auto sample_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
         std::lock_guard<std::mutex> lock(lowstate->mutex_);
+        data.lowstate_tick = lowstate->msg_.tick();
+        data.lowstate_sample_timestamp = sample_time;
         // base_angular_velocity
         for(int i(0); i<3; i++) {
             data.root_ang_vel_b[i] = lowstate->msg_.imu_state().gyroscope()[i];

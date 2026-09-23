@@ -3,16 +3,75 @@
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <unitree/dds_wrapper/common/Publisher.h>
+#include <unitree/dds_wrapper/common/Subscription.h>
 #include <unitree/idl/go2/HeightMap_.hpp>
+#include <unitree/idl/go2/LowState_.hpp>
 #ifdef HAS_REALSENSE
 #include "sensors/realsense_depth_camera.h"
 #endif
 #include "sensors/dds_depth_provider.h"  // always included for sim2sim
+
+namespace {
+
+double timing_now_sec()
+{
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+class LowStateTimingMonitor
+{
+public:
+    LowStateTimingMonitor()
+    {
+        sub_ = std::make_shared<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::LowState_>>(
+            "rt/lowstate",
+            [this](const void* msg) {
+                const auto& lowstate = *static_cast<const unitree_go::msg::dds_::LowState_*>(msg);
+                tick_.store(lowstate.tick(), std::memory_order_release);
+                rx_time_.store(timing_now_sec(), std::memory_order_release);
+                seq_.fetch_add(1, std::memory_order_acq_rel);
+            });
+        spdlog::info("[TimingLog] lowstate timing monitor subscribed to rt/lowstate");
+    }
+
+    struct Snapshot {
+        uint32_t tick = 0;
+        double rx_time = 0.0;
+        uint64_t seq = 0;
+    };
+
+    Snapshot snapshot() const
+    {
+        Snapshot s;
+        s.tick = tick_.load(std::memory_order_acquire);
+        s.rx_time = rx_time_.load(std::memory_order_acquire);
+        s.seq = seq_.load(std::memory_order_acquire);
+        return s;
+    }
+
+private:
+    std::shared_ptr<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::LowState_>> sub_;
+    std::atomic<uint32_t> tick_{0};
+    std::atomic<double> rx_time_{0.0};
+    std::atomic<uint64_t> seq_{0};
+};
+
+LowStateTimingMonitor& lowstate_timing_monitor()
+{
+    static LowStateTimingMonitor monitor;
+    return monitor;
+}
+
+} // namespace
 
 namespace isaaclab {
 
@@ -127,6 +186,26 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     auto cfg = param::config["FSM"][state_string];
     auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
     policy_action_warmup_s_ = cfg["policy_action_warmup_s"].as<double>(0.0);
+    timing_log_enabled_ = cfg["timing_log"].as<bool>(false);
+    timing_log_autostart_ = cfg["timing_log_autostart"].as<bool>(true);
+    timing_log_path_ = cfg["timing_log_path"].as<std::string>(
+        "../../../log/" + state_string + "_timing.csv");
+    {
+        std::filesystem::path timing_path(timing_log_path_);
+        if (timing_path.is_relative()) {
+            timing_path = param::proj_dir / timing_path;
+        }
+        timing_log_path_ = timing_path.lexically_normal().string();
+    }
+    if (timing_log_enabled_) {
+        (void)lowstate_timing_monitor();
+        const auto toggle_expr = cfg["timing_log_toggle"].as<std::string>("LT + start.on_pressed");
+        timing_log_toggle_check_ = unitree::common::dsl::Compile(
+            *unitree::common::dsl::Parser(toggle_expr).Parse());
+        spdlog::info(
+            "[TimingLog] {} path={} autostart={} toggle='{}'",
+            state_string, timing_log_path_, timing_log_autostart_, toggle_expr);
+    }
 
     const auto deploy_cfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
@@ -272,8 +351,67 @@ bool State_RLBase::can_enter()
     return true;
 }
 
+void State_RLBase::open_timing_log()
+{
+    if (!timing_log_enabled_) return;
+
+    std::lock_guard<std::mutex> lock(timing_log_mtx_);
+    if (timing_log_file_) return;
+
+    std::filesystem::create_directories(
+        std::filesystem::path(timing_log_path_).parent_path());
+    const char* mode = timing_log_started_once_ ? "a" : "w";
+    timing_log_file_ = fopen(timing_log_path_.c_str(), mode);
+    if (!timing_log_file_) {
+        timing_log_active_ = false;
+        spdlog::error("[TimingLog] failed to open {}", timing_log_path_);
+        return;
+    }
+
+    setvbuf(timing_log_file_, timing_log_buffer_, _IOFBF, sizeof(timing_log_buffer_));
+    if (!timing_log_started_once_) {
+        fprintf(timing_log_file_,
+                "policy_step,t_policy_start,t_policy_end,policy_step_ms,"
+                "depth_valid,depth_seq,depth_frame_number,depth_source_stamp,"
+                "depth_rx_time,depth_age_ms,depth_seq_delta,"
+                "lowstate_tick,lowstate_monitor_tick,lowstate_rx_time,"
+                "lowstate_age_ms,lowstate_tick_delta,lowstate_rx_seq\n");
+        timing_log_started_once_ = true;
+    }
+    timing_log_active_ = true;
+    spdlog::info("[TimingLog] recording started: {}", timing_log_path_);
+}
+
+void State_RLBase::close_timing_log()
+{
+    std::lock_guard<std::mutex> lock(timing_log_mtx_);
+    if (!timing_log_file_) {
+        timing_log_active_ = false;
+        return;
+    }
+    fflush(timing_log_file_);
+    fclose(timing_log_file_);
+    timing_log_file_ = nullptr;
+    timing_log_active_ = false;
+    spdlog::info("[TimingLog] recording stopped: {}", timing_log_path_);
+}
+
 void State_RLBase::run()
 {
+    if (timing_log_enabled_ && timing_log_toggle_check_) {
+        const bool toggle_pressed = timing_log_toggle_check_(lowstate->joystick);
+        if (toggle_pressed && !timing_log_toggle_latched_) {
+            if (timing_log_active_) {
+                close_timing_log();
+            } else {
+                open_timing_log();
+            }
+            timing_log_toggle_latched_ = true;
+        } else if (!toggle_pressed) {
+            timing_log_toggle_latched_ = false;
+        }
+    }
+
     // Do not apply policy targets until the first depth frame arrives. Hold the
     // entry posture for this cycle; CtrlFSM will transition on provider failure.
     if ((depth_provider_ && !depth_provider_->is_ready()) ||
@@ -347,6 +485,19 @@ void State_RLBase::enter()
     // first complete inference result has been published.
     env->reset();
 
+    if (timing_log_enabled_) {
+        close_timing_log();
+        timing_log_started_once_ = false;
+        timing_log_toggle_latched_ = false;
+        if (timing_log_autostart_) {
+            open_timing_log();
+        } else {
+            spdlog::info(
+                "[TimingLog] armed; press configured toggle to start/stop recording: {}",
+                timing_log_path_);
+        }
+    }
+
     // Start policy thread
     policy_thread_running.store(true, std::memory_order_release);
     policy_thread = std::thread([this]{
@@ -363,10 +514,76 @@ void State_RLBase::enter()
                 policy_action_warmup_s_);
         }
 
+        uint64_t timing_step = 0;
+        uint64_t prev_depth_seq = 0;
+        uint32_t prev_lowstate_tick = 0;
+
         auto sleepTill = clock::now() + dt;
         while (policy_thread_running.load(std::memory_order_acquire))
         {
+            const double t_policy_start = timing_now_sec();
             env->step();
+            const double t_policy_end = timing_now_sec();
+
+            {
+                std::lock_guard<std::mutex> timing_lock(timing_log_mtx_);
+                if (timing_log_file_) {
+                bool depth_valid = false;
+                uint64_t depth_seq = 0;
+                uint64_t depth_frame_number = 0;
+                double depth_source_stamp = 0.0;
+                double depth_rx_time = 0.0;
+                {
+                    std::lock_guard<std::mutex> lock(env->robot->data.depth_mtx);
+                    depth_valid = env->robot->data.depth_obs_last_read_valid;
+                    depth_seq = env->robot->data.depth_obs_last_read_seq;
+                    depth_frame_number = env->robot->data.depth_obs_last_read_frame_number;
+                    depth_source_stamp = env->robot->data.depth_obs_last_read_source_timestamp;
+                    depth_rx_time = env->robot->data.depth_obs_last_read_rx_timestamp;
+                }
+
+                const auto lowstate_snapshot = lowstate_timing_monitor().snapshot();
+                const uint32_t lowstate_tick = env->robot->data.lowstate_tick;
+                const double depth_age_ms = (depth_valid && depth_rx_time > 0.0)
+                    ? (t_policy_start - depth_rx_time) * 1000.0
+                    : std::numeric_limits<double>::quiet_NaN();
+                const double lowstate_age_ms = (lowstate_snapshot.rx_time > 0.0)
+                    ? (t_policy_start - lowstate_snapshot.rx_time) * 1000.0
+                    : std::numeric_limits<double>::quiet_NaN();
+                const long long depth_seq_delta = (timing_step == 0)
+                    ? 0LL
+                    : static_cast<long long>(depth_seq) - static_cast<long long>(prev_depth_seq);
+                const long long lowstate_tick_delta = (timing_step == 0)
+                    ? 0LL
+                    : static_cast<long long>(lowstate_tick) - static_cast<long long>(prev_lowstate_tick);
+
+                fprintf(timing_log_file_,
+                        "%llu,%.9f,%.9f,%.3f,%d,%llu,%llu,%.9f,%.9f,%.3f,%lld,"
+                        "%u,%u,%.9f,%.3f,%lld,%llu\n",
+                        static_cast<unsigned long long>(timing_step),
+                        t_policy_start,
+                        t_policy_end,
+                        (t_policy_end - t_policy_start) * 1000.0,
+                        depth_valid ? 1 : 0,
+                        static_cast<unsigned long long>(depth_seq),
+                        static_cast<unsigned long long>(depth_frame_number),
+                        depth_source_stamp,
+                        depth_rx_time,
+                        depth_age_ms,
+                        depth_seq_delta,
+                        lowstate_tick,
+                        lowstate_snapshot.tick,
+                        lowstate_snapshot.rx_time,
+                        lowstate_age_ms,
+                        lowstate_tick_delta,
+                        static_cast<unsigned long long>(lowstate_snapshot.seq));
+
+                prev_depth_seq = depth_seq;
+                prev_lowstate_tick = lowstate_tick;
+                ++timing_step;
+                }
+            }
+
             if (clock::now() >= action_release_time) {
                 policy_action_ready_.store(true, std::memory_order_release);
             }
@@ -386,6 +603,8 @@ void State_RLBase::exit()
 
     // Keep the depth provider warm across state changes. In particular, never
     // block the FSM thread on RealSense pipeline teardown after a USB fault.
+
+    close_timing_log();
 
     if (log_file) {
         fflush(log_file);

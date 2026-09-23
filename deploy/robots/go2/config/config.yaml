@@ -40,3 +40,7 @@ FSM:
     runner: depth_e2e
     policy_dir: config/policy/velocity/depth_e2e
     policy_action_warmup_s: 1.0
+    timing_log: true
+    timing_log_autostart: false
+    timing_log_toggle: LT + start.on_pressed
+    timing_log_path: ../../../log/depth_velocity_timing.csv

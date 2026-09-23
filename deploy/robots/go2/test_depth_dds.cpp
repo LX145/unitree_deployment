@@ -1,11 +1,12 @@
 // Copyright (c) 2025, Unitree Robotics Co., Ltd.
 // All rights reserved.
 //
-// Standalone tool: subscribe to rt/depth_image DDS topic and verify depth data.
+// Standalone tool: subscribe to the policy-depth debug DDS topic and verify depth data.
 // Usage:
-//   ./test_depth_dds [--network lo] [--save] [--display]
+//   ./test_depth_dds [--network lo] [--save] [--no-display] [--topic TOPIC]
+//     --topic    DDS topic to subscribe (default: rt/depth_image_debug)
 //     --save     Save depth frames as PGM files to /tmp/depth_dds/
-//     --display  Show depth via OpenCV window (requires OpenCV)
+//     --no-display  Disable OpenCV window
 
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/dds_wrapper/common/Subscription.h>
@@ -31,7 +32,7 @@ int main(int argc, char** argv)
     bool save_frames = false;
     bool show_display = true;  // default: show
     std::string network;
-    std::string topic = "rt/depth_image";
+    std::string topic = "rt/depth_image_debug";
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];

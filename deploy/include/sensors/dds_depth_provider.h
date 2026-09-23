@@ -12,8 +12,8 @@
 #include <memory>
 #include <algorithm>
 #include <atomic>
-#ifdef ENABLE_DEPTH_STATS
 #include <chrono>
+#ifdef ENABLE_DEPTH_STATS
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -33,6 +33,13 @@
  *   provider->stop();
  */
 class DDSDepthProvider : public DepthProvider {
+private:
+    static double steady_now_sec()
+    {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
 public:
     using HeightMap_t = unitree_go::msg::dds_::HeightMap_;
 
@@ -82,9 +89,13 @@ public:
                 size_error_reported_.store(false);
                 {
                     std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
+                    const double rx_time = steady_now_sec();
                     robot_->data.depth_obs = heightmap.data();
                     robot_->data.depth_valid = valid;
-                    robot_->data.depth_timestamp = heightmap.stamp();
+                    robot_->data.depth_source_timestamp = heightmap.stamp();
+                    robot_->data.depth_rx_timestamp = rx_time;
+                    robot_->data.depth_timestamp = rx_time;
+                    robot_->data.depth_frame_number = robot_->data.depth_seq + 1;
                     robot_->data.depth_seq++;
                 }
                 ready_.store(valid);

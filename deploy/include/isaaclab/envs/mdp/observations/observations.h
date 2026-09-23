@@ -155,9 +155,19 @@ REGISTER_OBSERVATION(depth_image)
     std::lock_guard<std::mutex> lock(asset->data.depth_mtx);
 
     if (!asset->data.depth_valid || asset->data.depth_obs.empty()) {
+        asset->data.depth_obs_last_read_valid = false;
+        asset->data.depth_obs_last_read_seq = 0;
+        asset->data.depth_obs_last_read_frame_number = 0;
+        asset->data.depth_obs_last_read_source_timestamp = 0.0;
+        asset->data.depth_obs_last_read_rx_timestamp = 0.0;
         return std::vector<float>(w * h, 0.0f);
     }
 
+    asset->data.depth_obs_last_read_valid = true;
+    asset->data.depth_obs_last_read_seq = asset->data.depth_seq;
+    asset->data.depth_obs_last_read_frame_number = asset->data.depth_frame_number;
+    asset->data.depth_obs_last_read_source_timestamp = asset->data.depth_source_timestamp;
+    asset->data.depth_obs_last_read_rx_timestamp = asset->data.depth_rx_timestamp;
     return asset->data.depth_obs;
 }
 

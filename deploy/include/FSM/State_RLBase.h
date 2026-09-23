@@ -11,6 +11,8 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <functional>
+#include <mutex>
 
 class DepthProvider;  // forward declaration
 
@@ -43,6 +45,20 @@ private:
     std::vector<float> entry_joint_pos_;
     double policy_action_warmup_s_ = 0.0;
     bool rl_gains_applied_ = false;
+
+    bool timing_log_enabled_ = false;
+    bool timing_log_autostart_ = true;
+    bool timing_log_active_ = false;
+    bool timing_log_started_once_ = false;
+    bool timing_log_toggle_latched_ = false;
+    std::function<bool(const unitree::common::UnitreeJoystick&)> timing_log_toggle_check_;
+    std::string timing_log_path_;
+    FILE* timing_log_file_ = nullptr;
+    char timing_log_buffer_[256 * 1024];
+    std::mutex timing_log_mtx_;
+
+    void open_timing_log();
+    void close_timing_log();
 };
 
 REGISTER_FSM(State_RLBase)

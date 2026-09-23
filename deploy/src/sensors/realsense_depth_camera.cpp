@@ -619,9 +619,13 @@ void RealSenseDepthCamera::capture_loop()
                 // ---- write to robot->data ----
                 {
                     std::lock_guard<std::mutex> lock(robot_->data.depth_mtx);
+                    const double rx_time = now_sec();
                     robot_->data.depth_obs = std::move(stacked);
                     robot_->data.depth_valid = true;
-                    robot_->data.depth_timestamp = now_sec();
+                    robot_->data.depth_source_timestamp = depth.get_timestamp() * 1.0e-3;
+                    robot_->data.depth_rx_timestamp = rx_time;
+                    robot_->data.depth_timestamp = rx_time;
+                    robot_->data.depth_frame_number = depth.get_frame_number();
                     robot_->data.depth_seq++;
                 }
                 ready_.store(true);
