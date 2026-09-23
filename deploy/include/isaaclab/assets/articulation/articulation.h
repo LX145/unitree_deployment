@@ -58,15 +58,30 @@ struct ArticulationData
     double depth_timestamp = 0.0;
     double depth_source_timestamp = 0.0;  // Sensor/simulator-provided stamp, time base may differ.
     double depth_rx_timestamp = 0.0;      // Local steady-clock time when depth_obs was written.
+    // Local steady-clock time when the frame was pulled out of the pipeline,
+    // i.e. before the SDK filter chain and preprocessing. Together with
+    // depth_rx_timestamp this gives the true capture->policy latency.
+    double depth_capture_timestamp = 0.0;
+    double depth_wait_ms = 0.0;      // time spent waiting for a frameset
+    double depth_process_ms = 0.0;   // capture -> write (filter chain + crop/resize/normalize)
+    double depth_filter_ms = 0.0;    // SDK filter chain only, subset of depth_process_ms
+    double depth_interval_ms = 0.0;  // wall time since the previous depth buffer write
     uint64_t depth_frame_number = 0;      // Sensor/simulator frame counter if available.
+    uint64_t depth_frame_gap = 0;         // sensor frames skipped since the previous write
     uint64_t depth_seq = 0;               // Monotonically increasing local depth buffer counter.
 
     // Metadata for the exact depth buffer read by the observation pipeline.
     bool depth_obs_last_read_valid = false;
     uint64_t depth_obs_last_read_seq = 0;
     uint64_t depth_obs_last_read_frame_number = 0;
+    uint64_t depth_obs_last_read_frame_gap = 0;
     double depth_obs_last_read_source_timestamp = 0.0;
     double depth_obs_last_read_rx_timestamp = 0.0;
+    double depth_obs_last_read_capture_timestamp = 0.0;
+    double depth_obs_last_read_wait_ms = 0.0;
+    double depth_obs_last_read_process_ms = 0.0;
+    double depth_obs_last_read_filter_ms = 0.0;
+    double depth_obs_last_read_interval_ms = 0.0;
 
     // Metadata for the latest lowstate sampled by Articulation::update().
     uint32_t lowstate_tick = 0;

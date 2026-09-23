@@ -7,6 +7,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -188,6 +189,7 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     policy_action_warmup_s_ = cfg["policy_action_warmup_s"].as<double>(0.0);
     timing_log_enabled_ = cfg["timing_log"].as<bool>(false);
     timing_log_autostart_ = cfg["timing_log_autostart"].as<bool>(true);
+    timing_log_timestamp_ = cfg["timing_log_timestamp"].as<bool>(true);
     timing_log_path_ = cfg["timing_log_path"].as<std::string>(
         "../../../log/" + state_string + "_timing.csv");
     {
@@ -351,6 +353,30 @@ bool State_RLBase::can_enter()
     return true;
 }
 
+std::string State_RLBase::make_timing_log_path() const
+{
+    const std::filesystem::path base(timing_log_path_);
+    if (!timing_log_timestamp_) return base.string();
+
+    const std::filesystem::path parent = base.parent_path();
+    const std::string stem = base.stem().string();
+    const std::string ext = base.extension().string();
+
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&now, &tm);
+    char stamp[32] = {0};
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
+
+    // Local wall-clock stamps have 1 s resolution; make repeated start/stop
+    // toggles within the same second produce distinct files.
+    std::filesystem::path candidate = parent / (stem + "_" + stamp + ext);
+    for (int suffix = 1; std::filesystem::exists(candidate); ++suffix) {
+        candidate = parent / (stem + "_" + stamp + "_" + std::to_string(suffix) + ext);
+    }
+    return candidate.string();
+}
+
 void State_RLBase::open_timing_log()
 {
     if (!timing_log_enabled_) return;
@@ -360,26 +386,27 @@ void State_RLBase::open_timing_log()
 
     std::filesystem::create_directories(
         std::filesystem::path(timing_log_path_).parent_path());
-    const char* mode = timing_log_started_once_ ? "a" : "w";
-    timing_log_file_ = fopen(timing_log_path_.c_str(), mode);
+
+    // Each recording session gets its own timestamped file so successive runs
+    // never overwrite each other.
+    timing_log_active_path_ = make_timing_log_path();
+    timing_log_file_ = fopen(timing_log_active_path_.c_str(), "w");
     if (!timing_log_file_) {
         timing_log_active_ = false;
-        spdlog::error("[TimingLog] failed to open {}", timing_log_path_);
+        spdlog::error("[TimingLog] failed to open {}", timing_log_active_path_);
         return;
     }
 
     setvbuf(timing_log_file_, timing_log_buffer_, _IOFBF, sizeof(timing_log_buffer_));
-    if (!timing_log_started_once_) {
-        fprintf(timing_log_file_,
-                "policy_step,t_policy_start,t_policy_end,policy_step_ms,"
-                "depth_valid,depth_seq,depth_frame_number,depth_source_stamp,"
-                "depth_rx_time,depth_age_ms,depth_seq_delta,"
-                "lowstate_tick,lowstate_monitor_tick,lowstate_rx_time,"
-                "lowstate_age_ms,lowstate_tick_delta,lowstate_rx_seq\n");
-        timing_log_started_once_ = true;
-    }
+    fprintf(timing_log_file_,
+            "policy_step,t_policy_start,t_policy_end,policy_step_ms,"
+            "depth_valid,depth_seq,depth_frame_number,depth_frame_gap,depth_source_stamp,"
+            "depth_capture_time,depth_rx_time,depth_latency_ms,depth_age_ms,"
+            "depth_seq_delta,depth_interval_ms,depth_wait_ms,depth_process_ms,depth_filter_ms,"
+            "lowstate_tick,lowstate_monitor_tick,lowstate_rx_time,"
+            "lowstate_age_ms,lowstate_tick_delta,lowstate_rx_seq\n");
     timing_log_active_ = true;
-    spdlog::info("[TimingLog] recording started: {}", timing_log_path_);
+    spdlog::info("[TimingLog] recording started: {}", timing_log_active_path_);
 }
 
 void State_RLBase::close_timing_log()
@@ -393,7 +420,7 @@ void State_RLBase::close_timing_log()
     fclose(timing_log_file_);
     timing_log_file_ = nullptr;
     timing_log_active_ = false;
-    spdlog::info("[TimingLog] recording stopped: {}", timing_log_path_);
+    spdlog::info("[TimingLog] recording stopped: {}", timing_log_active_path_);
 }
 
 void State_RLBase::run()
@@ -487,7 +514,6 @@ void State_RLBase::enter()
 
     if (timing_log_enabled_) {
         close_timing_log();
-        timing_log_started_once_ = false;
         timing_log_toggle_latched_ = false;
         if (timing_log_autostart_) {
             open_timing_log();
@@ -531,21 +557,37 @@ void State_RLBase::enter()
                 bool depth_valid = false;
                 uint64_t depth_seq = 0;
                 uint64_t depth_frame_number = 0;
+                uint64_t depth_frame_gap = 0;
                 double depth_source_stamp = 0.0;
+                double depth_capture_time = 0.0;
                 double depth_rx_time = 0.0;
+                double depth_interval_ms = 0.0;
+                double depth_wait_ms = 0.0;
+                double depth_process_ms = 0.0;
+                double depth_filter_ms = 0.0;
                 {
                     std::lock_guard<std::mutex> lock(env->robot->data.depth_mtx);
                     depth_valid = env->robot->data.depth_obs_last_read_valid;
                     depth_seq = env->robot->data.depth_obs_last_read_seq;
                     depth_frame_number = env->robot->data.depth_obs_last_read_frame_number;
+                    depth_frame_gap = env->robot->data.depth_obs_last_read_frame_gap;
                     depth_source_stamp = env->robot->data.depth_obs_last_read_source_timestamp;
+                    depth_capture_time = env->robot->data.depth_obs_last_read_capture_timestamp;
                     depth_rx_time = env->robot->data.depth_obs_last_read_rx_timestamp;
+                    depth_interval_ms = env->robot->data.depth_obs_last_read_interval_ms;
+                    depth_wait_ms = env->robot->data.depth_obs_last_read_wait_ms;
+                    depth_process_ms = env->robot->data.depth_obs_last_read_process_ms;
+                    depth_filter_ms = env->robot->data.depth_obs_last_read_filter_ms;
                 }
 
                 const auto lowstate_snapshot = lowstate_timing_monitor().snapshot();
                 const uint32_t lowstate_tick = env->robot->data.lowstate_tick;
                 const double depth_age_ms = (depth_valid && depth_rx_time > 0.0)
                     ? (t_policy_start - depth_rx_time) * 1000.0
+                    : std::numeric_limits<double>::quiet_NaN();
+                const double depth_latency_ms = (depth_valid && depth_rx_time > 0.0 &&
+                                                 depth_capture_time > 0.0)
+                    ? (depth_rx_time - depth_capture_time) * 1000.0
                     : std::numeric_limits<double>::quiet_NaN();
                 const double lowstate_age_ms = (lowstate_snapshot.rx_time > 0.0)
                     ? (t_policy_start - lowstate_snapshot.rx_time) * 1000.0
@@ -558,7 +600,8 @@ void State_RLBase::enter()
                     : static_cast<long long>(lowstate_tick) - static_cast<long long>(prev_lowstate_tick);
 
                 fprintf(timing_log_file_,
-                        "%llu,%.9f,%.9f,%.3f,%d,%llu,%llu,%.9f,%.9f,%.3f,%lld,"
+                        "%llu,%.9f,%.9f,%.3f,%d,%llu,%llu,%llu,%.9f,%.9f,%.9f,%.3f,%.3f,%lld,"
+                        "%.3f,%.3f,%.3f,%.3f,"
                         "%u,%u,%.9f,%.3f,%lld,%llu\n",
                         static_cast<unsigned long long>(timing_step),
                         t_policy_start,
@@ -567,10 +610,17 @@ void State_RLBase::enter()
                         depth_valid ? 1 : 0,
                         static_cast<unsigned long long>(depth_seq),
                         static_cast<unsigned long long>(depth_frame_number),
+                        static_cast<unsigned long long>(depth_frame_gap),
                         depth_source_stamp,
+                        depth_capture_time,
                         depth_rx_time,
+                        depth_latency_ms,
                         depth_age_ms,
                         depth_seq_delta,
+                        depth_interval_ms,
+                        depth_wait_ms,
+                        depth_process_ms,
+                        depth_filter_ms,
                         lowstate_tick,
                         lowstate_snapshot.tick,
                         lowstate_snapshot.rx_time,

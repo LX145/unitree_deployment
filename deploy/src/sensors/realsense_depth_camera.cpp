@@ -58,11 +58,14 @@ CropRect crop_for_target_intrinsics(int raw_w, int raw_h, int out_w, int out_h,
     return crop;
 }
 
+// Absolute steady-clock seconds. This MUST share its epoch with the policy-side
+// timestamps (std::chrono::steady_clock since boot); an earlier implementation
+// used a process-relative epoch, which made every cross-module timestamp
+// difference (for example depth_age_ms) meaningless.
 double now_sec()
 {
-    static auto start = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration<double>(now - start).count();
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // ---------------------------------------------------------------------------
@@ -514,10 +517,13 @@ void RealSenseDepthCamera::capture_loop()
         auto next_wake = clock::now();
         auto last_frame_or_start = clock::now();
         bool received_frame = false;
+        double last_write_time = 0.0;
+        uint64_t last_sensor_frame_number = 0;
 
         while (running_.load()) {
             try {
                 // ---- get frame ----
+                const double wait_start = now_sec();
                 rs2::frameset frames;
                 if (!pipe.try_wait_for_frames(&frames, 100)) {
                     const auto wait_now = clock::now();
@@ -551,11 +557,19 @@ void RealSenseDepthCamera::capture_loop()
                 received_frame = true;
                 last_frame_or_start = clock::now();
 
+                // The frame below is the one that produced this iteration of the
+                // pipeline. Timestamping it here on the same steady clock as the
+                // policy lets us measure the true capture -> policy latency.
+                const double capture_time = now_sec();
+
                 rs2::depth_frame depth = frames.get_depth_frame();
                 if (!depth) {
                     spdlog::warn("[Depth] no depth frame in frameset");
                     continue;
                 }
+
+                const uint64_t sensor_frame_number = depth.get_frame_number();
+                const double filter_start = now_sec();
 
                 // Apply the InstinctLab-style filter chain (in-place on the frame).
                 // Temporal smoothing is opt-in: it adds ~1 frame latency, which
@@ -571,6 +585,8 @@ void RealSenseDepthCamera::capture_loop()
                     f = disparity_to_depth.process(f);
                     depth = f.as<rs2::depth_frame>();
                 }
+
+                const double filter_end = now_sec();
 
                 const auto* raw = reinterpret_cast<const uint16_t*>(depth.get_data());
                 int raw_w = depth.get_width();
@@ -623,10 +639,27 @@ void RealSenseDepthCamera::capture_loop()
                     robot_->data.depth_obs = std::move(stacked);
                     robot_->data.depth_valid = true;
                     robot_->data.depth_source_timestamp = depth.get_timestamp() * 1.0e-3;
+                    robot_->data.depth_capture_timestamp = capture_time;
                     robot_->data.depth_rx_timestamp = rx_time;
                     robot_->data.depth_timestamp = rx_time;
-                    robot_->data.depth_frame_number = depth.get_frame_number();
+                    // Decomposition of the update interval:
+                    //   interval = wait + process + idle
+                    // wait    : blocked inside try_wait_for_frames
+                    // process : capture -> buffer write (filter chain + crop/resize/blur)
+                    // idle    : rate-limit sleep, debug publishing, bookkeeping
+                    robot_->data.depth_wait_ms = (capture_time - wait_start) * 1.0e3;
+                    robot_->data.depth_process_ms = (rx_time - capture_time) * 1.0e3;
+                    robot_->data.depth_filter_ms = (filter_end - filter_start) * 1.0e3;
+                    robot_->data.depth_interval_ms = (last_write_time > 0.0)
+                        ? (rx_time - last_write_time) * 1.0e3
+                        : 0.0;
+                    robot_->data.depth_frame_number = sensor_frame_number;
+                    robot_->data.depth_frame_gap = (last_sensor_frame_number > 0)
+                        ? sensor_frame_number - last_sensor_frame_number
+                        : 0;
                     robot_->data.depth_seq++;
+                    last_write_time = rx_time;
+                    last_sensor_frame_number = sensor_frame_number;
                 }
                 ready_.store(true);
 

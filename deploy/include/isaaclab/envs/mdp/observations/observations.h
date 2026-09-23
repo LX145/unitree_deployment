@@ -158,16 +158,28 @@ REGISTER_OBSERVATION(depth_image)
         asset->data.depth_obs_last_read_valid = false;
         asset->data.depth_obs_last_read_seq = 0;
         asset->data.depth_obs_last_read_frame_number = 0;
+        asset->data.depth_obs_last_read_frame_gap = 0;
         asset->data.depth_obs_last_read_source_timestamp = 0.0;
         asset->data.depth_obs_last_read_rx_timestamp = 0.0;
+        asset->data.depth_obs_last_read_capture_timestamp = 0.0;
+        asset->data.depth_obs_last_read_wait_ms = 0.0;
+        asset->data.depth_obs_last_read_process_ms = 0.0;
+        asset->data.depth_obs_last_read_filter_ms = 0.0;
+        asset->data.depth_obs_last_read_interval_ms = 0.0;
         return std::vector<float>(w * h, 0.0f);
     }
 
     asset->data.depth_obs_last_read_valid = true;
     asset->data.depth_obs_last_read_seq = asset->data.depth_seq;
     asset->data.depth_obs_last_read_frame_number = asset->data.depth_frame_number;
+    asset->data.depth_obs_last_read_frame_gap = asset->data.depth_frame_gap;
     asset->data.depth_obs_last_read_source_timestamp = asset->data.depth_source_timestamp;
     asset->data.depth_obs_last_read_rx_timestamp = asset->data.depth_rx_timestamp;
+    asset->data.depth_obs_last_read_capture_timestamp = asset->data.depth_capture_timestamp;
+    asset->data.depth_obs_last_read_wait_ms = asset->data.depth_wait_ms;
+    asset->data.depth_obs_last_read_process_ms = asset->data.depth_process_ms;
+    asset->data.depth_obs_last_read_filter_ms = asset->data.depth_filter_ms;
+    asset->data.depth_obs_last_read_interval_ms = asset->data.depth_interval_ms;
     return asset->data.depth_obs;
 }
 

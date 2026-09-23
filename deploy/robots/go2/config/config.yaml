@@ -43,4 +43,7 @@ FSM:
     timing_log: true
     timing_log_autostart: false
     timing_log_toggle: LT + start.on_pressed
+    # Each recording session writes its own timestamped file, e.g.
+    #   log/depth_velocity_timing_20260923_184512.csv
     timing_log_path: ../../../log/depth_velocity_timing.csv
+    timing_log_timestamp: true

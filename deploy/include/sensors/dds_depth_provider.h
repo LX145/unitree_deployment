@@ -93,10 +93,22 @@ public:
                     robot_->data.depth_obs = heightmap.data();
                     robot_->data.depth_valid = valid;
                     robot_->data.depth_source_timestamp = heightmap.stamp();
+                    // A DDS frame is already fully processed by the simulator,
+                    // so capture and write coincide from the policy's view and
+                    // there is no local processing latency to account for.
+                    robot_->data.depth_capture_timestamp = rx_time;
                     robot_->data.depth_rx_timestamp = rx_time;
                     robot_->data.depth_timestamp = rx_time;
+                    robot_->data.depth_wait_ms = 0.0;
+                    robot_->data.depth_process_ms = 0.0;
+                    robot_->data.depth_filter_ms = 0.0;
+                    robot_->data.depth_interval_ms = (last_write_time_ > 0.0)
+                        ? (rx_time - last_write_time_) * 1.0e3
+                        : 0.0;
                     robot_->data.depth_frame_number = robot_->data.depth_seq + 1;
+                    robot_->data.depth_frame_gap = 1;
                     robot_->data.depth_seq++;
+                    last_write_time_ = rx_time;
                 }
                 ready_.store(valid);
                 log_distribution(heightmap.data());
@@ -176,6 +188,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> ready_{false};
     std::atomic<bool> size_error_reported_{false};
+    double last_write_time_ = 0.0;
 #ifdef ENABLE_DEPTH_STATS
     bool log_distribution_ = false;
 #endif

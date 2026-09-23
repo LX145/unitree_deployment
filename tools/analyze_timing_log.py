@@ -48,8 +48,14 @@ FLOAT_FIELDS = (
     "t_policy_end",
     "policy_step_ms",
     "depth_source_stamp",
+    "depth_capture_time",
     "depth_rx_time",
+    "depth_latency_ms",
     "depth_age_ms",
+    "depth_interval_ms",
+    "depth_wait_ms",
+    "depth_process_ms",
+    "depth_filter_ms",
     "lowstate_rx_time",
     "lowstate_age_ms",
 )
@@ -58,6 +64,7 @@ INT_FIELDS = (
     "depth_valid",
     "depth_seq",
     "depth_frame_number",
+    "depth_frame_gap",
     "depth_seq_delta",
     "lowstate_tick",
     "lowstate_monitor_tick",
@@ -238,7 +245,13 @@ def analyze(log: TimingLog, label: str, stale_threshold: int = 5) -> dict:
         stats = describe(age)
         out["depth_age_ms"] = stats
         print(f"  depth age   (ms) : {fmt_stat(stats)}")
-        if stats["max"] > 100.0:
+        # A clock-base mismatch (for example a camera timestamp taken from a
+        # process-relative epoch) shows up as an absurd constant offset.
+        if abs(stats["p50"]) > 1.0e5:
+            out["warnings"].append(
+                "depth age is on a different clock base than t_policy_start; "
+                "latency is NOT measurable in this log")
+        elif stats["max"] > 100.0:
             out["warnings"].append(f"depth age peaked at {stats['max']:.1f} ms")
 
         # Phase relationship between the depth stream and the policy loop.
@@ -270,6 +283,48 @@ def analyze(log: TimingLog, label: str, stale_threshold: int = 5) -> dict:
                 f"(~{worst[1] * expected_dt:.0f} ms)")
             print(f"  !! {len(long_runs)} stall(s) >= {stale_threshold} steps; "
                   f"longest {worst[1]} steps")
+
+    # ---- depth pipeline stage breakdown ---------------------------------
+    latency = log.finite("depth_latency_ms")
+    if latency.size:
+        stats = describe(latency)
+        out["depth_latency_ms"] = stats
+        print(f"  capture->write   : {fmt_stat(stats, 'ms')}")
+        if stats["p95"] > 50.0:
+            out["warnings"].append(
+                f"depth capture->write latency p95 {stats['p95']:.1f} ms")
+
+    interval = log.finite("depth_interval_ms")
+    interval = interval[interval > 0.0]
+    if interval.size:
+        stats = describe(interval)
+        out["depth_interval_ms"] = stats
+        print(f"  update interval  : {fmt_stat(stats, 'ms')}")
+        print(f"  -> {1000.0 / stats['mean']:.2f} Hz depth update rate")
+        out["depth_update_hz"] = 1000.0 / stats["mean"]
+        policy_hz = float(out.get("policy_hz") or 0.0)
+        if policy_hz > 0.0 and out["depth_update_hz"] < 0.8 * policy_hz:
+            out["warnings"].append(
+                f"depth updates at only {out['depth_update_hz']:.1f} Hz vs "
+                f"{policy_hz:.1f} Hz policy rate")
+
+    for key, label in (("depth_wait_ms", "wait in pipeline"),
+                       ("depth_process_ms", "preprocess total"),
+                       ("depth_filter_ms", "  SDK filter part")):
+        values = log.finite(key)
+        values = values[values > 0.0]
+        if values.size:
+            out[key] = describe(values)
+            print(f"  {label:<17}: {fmt_stat(out[key], 'ms')}")
+
+    if log.has("depth_frame_gap"):
+        gap = log.col["depth_frame_gap"]
+        gap = gap[gap > 0]
+        if gap.size:
+            value, count = mode_of(gap)
+            print(f"  sensor frames/write: mean {float(np.mean(gap)):.2f}, "
+                  f"mode {value} ({count}/{gap.size}), max {int(gap.max())}")
+            out["depth_frame_gap"] = float(np.mean(gap))
 
     if log.has("depth_source_stamp"):
         stamps = log.finite("depth_source_stamp")
@@ -436,8 +491,8 @@ def main() -> int:
                 value = r.get(key)
                 row += f"{value:>{width}.2f}" if value is not None else f"{'-':>{width}}"
             print(row)
-        for key, name in (("depth_age_ms", "depth age mean"),
-                          ("depth_age_ms", "depth age p99"),
+        for key, name in (("depth_latency_ms", "depth latency mean"),
+                          ("depth_age_ms", "depth age mean"),
                           ("lowstate_age_ms", "proprio age mean"),
                           ("step_cost_ms", "step cost mean")):
             row = f"{name:<22}"
@@ -449,6 +504,7 @@ def main() -> int:
                 row += (f"{stats['mean']:>{width}.3f}" if name.endswith("mean")
                         else f"{stats['p99']:>{width}.3f}")
             print(row)
+        print("\n(note: 'depth age' is only meaningful when both timestamps share a clock)")
 
     if args.plot:
         out_dir = Path(args.plot_dir) if args.plot_dir else None

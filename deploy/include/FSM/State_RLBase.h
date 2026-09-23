@@ -48,15 +48,17 @@ private:
 
     bool timing_log_enabled_ = false;
     bool timing_log_autostart_ = true;
+    bool timing_log_timestamp_ = true;
     bool timing_log_active_ = false;
-    bool timing_log_started_once_ = false;
     bool timing_log_toggle_latched_ = false;
     std::function<bool(const unitree::common::UnitreeJoystick&)> timing_log_toggle_check_;
     std::string timing_log_path_;
+    std::string timing_log_active_path_;  // timestamped file currently being written
     FILE* timing_log_file_ = nullptr;
     char timing_log_buffer_[256 * 1024];
     std::mutex timing_log_mtx_;
 
+    std::string make_timing_log_path() const;
     void open_timing_log();
     void close_timing_log();
 };
