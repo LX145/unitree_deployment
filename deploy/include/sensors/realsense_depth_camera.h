@@ -63,8 +63,18 @@ public:
         float output_max = 0.5f;
 
         // ---- processing ----
-        bool filter_chain = true;  // InstinctLab-style RealSense SDK filter chain:
-                                   // depth->disparity->hole-fill->spatial->temporal->depth
+        // InstinctLab-style RealSense SDK filter chain:
+        //   depth -> disparity -> hole-fill -> spatial -> temporal -> depth
+        // Measured on Jetson Orin this chain costs ~73 ms per frame at
+        // 848x480, which caps the whole depth pipeline at ~13 Hz. Training and
+        // simulation render ideal depth and apply none of it, so it is also a
+        // sim2real mismatch. filter_chain is the master switch; the stages
+        // below allow bisecting the cost and the visual effect without code
+        // changes.
+        bool filter_chain = true;
+        bool filter_disparity = true;     // depth<->disparity transforms
+        bool filter_hole_filling = true;  // inpaints stereo holes
+        bool filter_spatial = true;       // edge-preserving spatial smoothing
         bool filter_chain_temporal = false;  // temporal smoothing adds ~1 frame
                                              // latency; enable only if training
                                              // randomizes depth-frame delay (as

@@ -116,6 +116,9 @@ RealSenseDepthCamera::Config RealSenseDepthCamera::Config::from_yaml(const YAML:
 
     // processing
     c.filter_chain = node["filter_chain"].as<bool>(true);
+    c.filter_disparity = node["filter_disparity"].as<bool>(true);
+    c.filter_hole_filling = node["filter_hole_filling"].as<bool>(true);
+    c.filter_spatial = node["filter_spatial"].as<bool>(true);
     c.filter_chain_temporal = node["filter_chain_temporal"].as<bool>(false);
     c.replace_invalid_with_max = node["replace_invalid_with_max"].as<bool>(true);
     c.resize_mode = node["resize_mode"].as<std::string>("bilinear");
@@ -576,13 +579,26 @@ void RealSenseDepthCamera::capture_loop()
                 // only matches policies trained with depth delay randomization.
                 if (cfg_.filter_chain) {
                     rs2::frame f = depth;
-                    f = depth_to_disparity.process(f);
-                    f = hole_filling.process(f);
-                    f = spatial.process(f);
+                    // The disparity round-trip is only worth paying for when a
+                    // filter that needs it is enabled.
+                    const bool need_disparity = cfg_.filter_disparity &&
+                        (cfg_.filter_hole_filling || cfg_.filter_spatial ||
+                         cfg_.filter_chain_temporal);
+                    if (need_disparity) {
+                        f = depth_to_disparity.process(f);
+                    }
+                    if (cfg_.filter_hole_filling) {
+                        f = hole_filling.process(f);
+                    }
+                    if (cfg_.filter_spatial) {
+                        f = spatial.process(f);
+                    }
                     if (cfg_.filter_chain_temporal) {
                         f = temporal.process(f);
                     }
-                    f = disparity_to_depth.process(f);
+                    if (need_disparity) {
+                        f = disparity_to_depth.process(f);
+                    }
                     depth = f.as<rs2::depth_frame>();
                 }
 

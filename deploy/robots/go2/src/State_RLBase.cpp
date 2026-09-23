@@ -548,6 +548,11 @@ void State_RLBase::enter()
         while (policy_thread_running.load(std::memory_order_acquire))
         {
             const double t_policy_start = timing_now_sec();
+            // Snapshot BEFORE the step: this is what the proprioception stream
+            // looked like at the instant the policy started. Taking it after
+            // env->step() (as an earlier revision did) reports packets that
+            // arrived *during* the step, which makes the age meaningless.
+            const auto lowstate_snapshot = lowstate_timing_monitor().snapshot();
             env->step();
             const double t_policy_end = timing_now_sec();
 
@@ -580,7 +585,6 @@ void State_RLBase::enter()
                     depth_filter_ms = env->robot->data.depth_obs_last_read_filter_ms;
                 }
 
-                const auto lowstate_snapshot = lowstate_timing_monitor().snapshot();
                 const uint32_t lowstate_tick = env->robot->data.lowstate_tick;
                 const double depth_age_ms = (depth_valid && depth_rx_time > 0.0)
                     ? (t_policy_start - depth_rx_time) * 1000.0
