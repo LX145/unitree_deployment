@@ -4,8 +4,8 @@ joint_names: [FL_hip_joint, FR_hip_joint, RL_hip_joint, RR_hip_joint, FL_thigh_j
   RR_calf_joint]
 step_dt: 0.02
 mujoco_xml_path: /home/zyt/zenbot_lab/source/zenbot_lab/zenbot_lab/assets/unitree_robots/go2/mujoco/scene.xml
-stiffness: [25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 25.0]
-damping: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+stiffness: [40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+damping: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 default_joint_pos: [0.0, -0.0, 0.0, -0.0, 0.8, 0.8, 1.0, 1.0, -1.5, -1.5, -1.5, -1.5]
 commands:
   base_velocity:
@@ -123,11 +123,58 @@ observations:
       scale: [1.0]
       clip: null
       history_length: 1
-depth_camera: {enable: true, monitor_only: false, raw_width: 848, raw_height: 480,
-  raw_fps: 60, width: 58, height: 58, min_depth: 0.0, max_depth: 2.0,
-  output_min: -0.5, output_max: 0.5, update_hz: 50.0, focal_length: 1.0,
-  horizontal_aperture: 1.1275702262200284, vertical_aperture: 1.1298876224806167,
-  fx: 51.43803787231445, fy: 51.33253860473633, cx: 28.410146713256836, cy: 28.318378448486328,
-  render_width: 58, render_height: 58, invalid_depth_threshold: 0.19, blur_kernel_size: 3,
-  blur_sigma: 1.0, real_input_width: 848, real_input_height: 480, real_crop: null,
-  resize_mode: bilinear}
+# Depth source. On the robot this is the RealSense D435i, in sim2sim it is the
+# MuJoCo renderer publishing rt/depth_image; both must produce the identical
+# policy input image described below.
+depth_camera:
+  enable: true
+  monitor_only: false
+
+  # ---- raw sensor / simulator frame ----
+  raw_width: 848
+  raw_height: 480
+  raw_fps: 60
+
+  # ---- policy input image ----
+  width: 58
+  height: 58
+  min_depth: 0.0
+  max_depth: 2.0
+  output_min: -0.5
+  output_max: 0.5
+  update_hz: 10.0
+  invalid_depth_threshold: 0.19
+  resize_mode: bilinear
+  blur_kernel_size: 3
+  blur_sigma: 1.0
+
+  # ---- intrinsics, must match the training camera ----
+  focal_length: 1.0
+  horizontal_aperture: 1.1275702262200284
+  vertical_aperture: 1.1298876224806167
+  fx: 51.43803787231445
+  fy: 51.33253860473633
+  cx: 28.410146713256836
+  cy: 28.318378448486328
+  render_width: 58
+  render_height: 58
+  real_input_width: 848
+  real_input_height: 480
+  real_crop: null
+
+  # ---- RealSense SDK filter chain (real hardware only) ----
+  # depth -> disparity -> hole-fill -> spatial -> disparity -> depth.
+  # Measured on Jetson Orin at 848x480 this costs ~73 ms/frame, i.e. 98% of
+  # the depth pipeline. With update_hz: 10 the 100 ms budget absorbs it, and it
+  # fills the stereo holes that show up on reflective floors. Training renders
+  # depth at the same 10 Hz (DEPTH_CAMERA_UPDATE_PERIOD = 0.1), so the image age
+  # the policy sees here (~74-174 ms) stays inside the training distribution.
+  filter_chain: true
+
+  # ---- debug: republish the exact policy input over DDS ----
+  # Subscribe with:  ./test_depth_dds --network eth0 [--save]
+  # Set publish_debug_dds back to false when done; it is a debug-only side
+  # channel and costs a little CPU on the capture thread.
+  publish_debug_dds: false
+  debug_publish_hz: 10.0
+  debug_topic: rt/depth_image_debug
